@@ -211,10 +211,12 @@ int ssh_chan_dispatch(ssh_session *s, u8 type, sreader *r)
 /* application-facing channel API                                      */
 /* ------------------------------------------------------------------ */
 
-int ssh_channel_open_session(ssh_session *s)
+/* Allocates a free channel slot and writes the fixed part of CHANNEL_OPEN (type, sender id, window,
+ * max packet) into *b; the caller appends whatever fields its channel type adds and sends it. Returns
+ * the new channel's id, or -1 (nothing allocated) if there is no room or we cannot open channels yet. */
+static int open_begin(ssh_session *s, const char *chan_type, sbuf *b)
 {
     int i;
-    sbuf b;
     if (!s->auth_ok || s->closed) return -1;
     for (i = 0; i < SSH_MAX_CHANNELS && s->chan[i].state != CH_FREE; i++) ;
     if (i == SSH_MAX_CHANNELS) return -1;
@@ -222,15 +224,45 @@ int ssh_channel_open_session(ssh_session *s)
     s->chan[i].state = CH_OPENING;
     s->chan[i].local_window = SSH_LOCAL_WINDOW;
     sb_init(&s->chan[i].out);
-    sb_init(&b);
-    sb_put_u8(&b, M_CHAN_OPEN);
-    sb_put_cstr(&b, "session");
-    sb_put_u32(&b, (u32)i);
-    sb_put_u32(&b, SSH_LOCAL_WINDOW);
-    sb_put_u32(&b, SSH_LOCAL_MAXPKT);
-    if (b.oom || ssh_send_packet(s, b.p, b.len) < 0) { sb_free(&b); ssh_chan_reset(&s->chan[i]); return -1; }
-    sb_free(&b);
+    sb_init(b);
+    sb_put_u8(b, M_CHAN_OPEN);
+    sb_put_cstr(b, chan_type);
+    sb_put_u32(b, (u32)i);
+    sb_put_u32(b, SSH_LOCAL_WINDOW);
+    sb_put_u32(b, SSH_LOCAL_MAXPKT);
     return i;
+}
+
+static int open_send(ssh_session *s, int i, sbuf *b)
+{
+    if (b->oom || ssh_send_packet(s, b->p, b->len) < 0) { sb_free(b); ssh_chan_reset(&s->chan[i]); return -1; }
+    sb_free(b);
+    return i;
+}
+
+int ssh_channel_open_session(ssh_session *s)
+{
+    sbuf b;
+    int i = open_begin(s, "session", &b);
+    if (i < 0) return -1;
+    return open_send(s, i, &b);
+}
+
+/* RFC 4254 s.7.2: a "direct-tcpip" channel -- local port forwarding.  The server connects to
+ * host:port and, once that succeeds, relays channel data there; originator_ip/port describe the
+ * client end of the connection that asked for the forward (cosmetic: some servers log or ACL on it,
+ * but a fabricated value is harmless if the real one is not to hand). */
+int ssh_channel_open_direct_tcpip(ssh_session *s, const char *host, int port,
+                                   const char *originator_ip, int originator_port)
+{
+    sbuf b;
+    int i = open_begin(s, "direct-tcpip", &b);
+    if (i < 0) return -1;
+    sb_put_cstr(&b, host);
+    sb_put_u32(&b, (u32)port);
+    sb_put_cstr(&b, originator_ip);
+    sb_put_u32(&b, (u32)originator_port);
+    return open_send(s, i, &b);
 }
 
 static int req_begin(ssh_session *s, int ch, sbuf *b, const char *type)

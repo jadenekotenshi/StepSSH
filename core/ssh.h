@@ -86,6 +86,12 @@ int          ssh_auth_kbdint_respond(ssh_session *s, const char **answers, int n
 
 /* ---- channels ---- */
 int          ssh_channel_open_session(ssh_session *s);              /* returns id or -1 */
+/* Local port forwarding (RFC 4254 s.7.2): asks the server to connect to host:port and relay channel
+ * data there.  originator_ip/port describe the client end of the forward's own connection, for the
+ * server's logs/ACLs; harmless if approximate. Remote forwarding (-R, a server-initiated
+ * "forwarded-tcpip" channel) is not implemented -- every server-initiated CHANNEL_OPEN is refused. */
+int          ssh_channel_open_direct_tcpip(ssh_session *s, const char *host, int port,
+                                           const char *originator_ip, int originator_port);
 int          ssh_channel_request_pty(ssh_session *s, int ch, const char *term,
                                      int cols, int rows, int pxw, int pxh);
 int          ssh_channel_request_shell(ssh_session *s, int ch);

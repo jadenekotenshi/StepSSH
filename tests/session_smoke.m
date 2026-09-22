@@ -13,7 +13,13 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
 #include "rng.h"
+#include "PortForward.h"
 
 void PSmoveto(float x, float y) { }
 void PSshow(const char *s) { }
@@ -68,6 +74,23 @@ static int wait_idle(SFTPBrowser *b, double timeout)
         waited += 0.05;
     }
     return 0;
+}
+
+/* Polls a plain (non-blocking) socket for at least one byte, pumping the run loop meanwhile so
+ * SSHSession's NSTimer keeps ticking (real time must pass for it to fire, same reason wait_for/
+ * wait_idle do this). Returns the byte count (0 = the peer closed, -1 = a real error, -2 = timeout). */
+static int wait_for_bytes(int fd, char *buf, int cap, double timeout)
+{
+    double waited = 0;
+    while (waited < timeout) {
+        int n = recv(fd, buf, cap - 1, 0);
+        if (n > 0) { buf[n] = 0; return n; }
+        if (n == 0) return 0;
+        if (errno != EWOULDBLOCK && errno != EAGAIN && errno != EINTR) return -1;
+        spin(0.05);
+        waited += 0.05;
+    }
+    return -2;
 }
 
 static int has_entry(SFTPBrowser *b, NSString *name, BOOL wantDir, unsigned long long wantSize, BOOL checkSize)
@@ -277,6 +300,62 @@ int main(int argc, char *argv[])
         [[b window] close];
         spin(0.5);
         remove([big cString]); remove([back cString]);
+    }
+
+    /* ---- port forwarding: forward a local port back to the SAME sshd's own listening port, and
+     * confirm the tunnel really round-trips through it -- if it does, connecting to the forwarded
+     * local port hands back that sshd's own SSH banner, a signal nothing here fabricates. ---- */
+    {
+        int sshdPort = atoi(argv[1]);
+        int lport = sshdPort + 1000;
+        PortForward *pf = [s addForwardWithLocalPort:lport remoteHost:@"127.0.0.1" remotePort:sshdPort];
+        int cfd, flags, n;
+        struct sockaddr_in a;
+        char buf[256];
+        double waited;
+
+        EXPECT(pf != nil, "a port forward can be added and starts listening");
+        EXPECT([[s portForwards] count] == 1, "it shows up in the session's list of forwards");
+
+        cfd = socket(AF_INET, SOCK_STREAM, 0);
+        flags = fcntl(cfd, F_GETFL, 0);
+        fcntl(cfd, F_SETFL, flags | O_NONBLOCK);
+        memset(&a, 0, sizeof(a));
+        a.sin_family = AF_INET;
+        a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        a.sin_port = htons((unsigned short)lport);
+        connect(cfd, (struct sockaddr *)&a, sizeof(a));      /* non-blocking: EINPROGRESS is normal, not an error */
+
+        n = wait_for_bytes(cfd, buf, sizeof(buf), 10);
+        EXPECT(n > 0 && !strncmp(buf, "SSH-2.0-", 8),
+               "connecting to the forwarded port yields the real sshd's own banner, through the tunnel");
+
+        close(cfd);
+        waited = 0;
+        while ((int)[pf->tunnels count] > 0 && waited < 10) { spin(0.05); waited += 0.05; }
+        EXPECT((int)[pf->tunnels count] == 0, "closing the local side is noticed and the tunnel is cleaned up");
+
+        [s removeForward:pf];
+        EXPECT([[s portForwards] count] == 0, "removing a forward drops it from the session's list");
+        {
+            int cfd2 = socket(AF_INET, SOCK_STREAM, 0);
+            int rc = connect(cfd2, (struct sockaddr *)&a, sizeof(a));   /* same address: still port lport */
+            EXPECT(rc != 0, "and the local port is no longer listening at all");
+            close(cfd2);
+        }
+
+        /* a forward to a port nothing listens on: the server's own connect() fails, which must reach
+         * us as CHAN_OPEN_FAILED and close our local side cleanly rather than hang it open */
+        {
+            PortForward *pf2 = [s addForwardWithLocalPort:lport remoteHost:@"127.0.0.1" remotePort:(sshdPort + 2000)];
+            int cfd3 = socket(AF_INET, SOCK_STREAM, 0);
+            fcntl(cfd3, F_SETFL, fcntl(cfd3, F_GETFL, 0) | O_NONBLOCK);
+            connect(cfd3, (struct sockaddr *)&a, sizeof(a));
+            n = wait_for_bytes(cfd3, buf, sizeof(buf), 10);
+            EXPECT(n == 0, "a forward to a port nothing answers on gets its local connection closed, not hung");
+            close(cfd3);
+            [s removeForward:pf2];
+        }
     }
 
     /* orderly exit */

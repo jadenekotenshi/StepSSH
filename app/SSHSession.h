@@ -5,6 +5,8 @@
 #include "sftp.h"
 
 @class SFTPBrowser;
+@class PortForward;
+@class PortForwardController;
 
 enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
 
@@ -43,6 +45,10 @@ enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
     sftp          *sftpCore;
     SFTPBrowser   *browser;
     int            openBrowserOnLogin;
+
+    /* local port forwarding ("ssh -L"): any number of further channels, one per tunneled connection */
+    NSMutableArray        *forwards;     /* PortForward* */
+    PortForwardController *forwardController;
 }
 - (id)initWithHost:(NSString *)h port:(int)p user:(NSString *)u keyPath:(NSString *)k
     knownHostsPath:(NSString *)kh owner:(id)o;
@@ -58,6 +64,14 @@ enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
 - (sftp *)sftpCore;
 - (void)sftpKick;                          /* push queued SFTP bytes out on the wire now */
 - (void)browserClosed:(id)aBrowser;
+
+/* port forwarding */
+- (void)openPortForwarding;
+- (PortForwardController *)portForwardController;
+- (NSArray *)portForwards;                                                              /* read-only, for the UI */
+- (PortForward *)addForwardWithLocalPort:(int)lp remoteHost:(NSString *)rh remotePort:(int)rp;  /* nil on failure */
+- (void)removeForward:(PortForward *)pf;
+- (void)portForwardControllerClosed:(id)pfc;
 @end
 
 @interface NSObject (SSHSessionOwner)

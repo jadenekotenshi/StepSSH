@@ -102,7 +102,8 @@ dist:
 
 # Run the UI setup/drawing code on the host (modern AppKit, PostScript calls stubbed).
 UI_SRC = app/AppController.m app/ConnectController.m app/KeyGenController.m app/PromptPanel.m \
-         app/SFTPBrowser.m app/SSHSession.m app/SecretField.m app/TerminalView.m app/UIHelpers.m
+         app/SFTPBrowser.m app/SSHSession.m app/SecretField.m app/TerminalView.m app/UIHelpers.m \
+         app/PortForward.m app/PortForwardController.m
 ui-smoke:
 	mkdir -p build
 	for f in tests/ui_smoke.m $(UI_SRC); do \

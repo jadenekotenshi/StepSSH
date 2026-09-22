@@ -114,6 +114,7 @@
     m = [self submenuNamed:@"Connection" inMenu:main];
     [self addItem:@"New Connection..." action:@selector(newConnection:) key:@"n" target:self toMenu:m];
     [self addItem:@"Open File Browser" action:@selector(openFileBrowser:) key:@"b" target:self toMenu:m];
+    [self addItem:@"Port Forwarding..." action:@selector(openPortForwarding:) key:@"" target:self toMenu:m];
     [self addItem:@"Generate Key..." action:@selector(generateKey:) key:@"g" target:self toMenu:m];
     [self addItem:@"Close Window" action:@selector(performClose:) key:@"w" target:nil toMenu:m];
 
@@ -250,6 +251,24 @@
         return;
     }
     [target openFileBrowser];
+}
+
+/* "Port Forwarding...": same rule as "Open File Browser" -- the session whose window is in front. */
+- (void)openPortForwarding:(id)sender
+{
+    NSWindow *key = [NSApp keyWindow];
+    SSHSession *target = nil;
+    int i, active = 0;
+    for (i = 0; i < (int)[sessions count]; i++) {
+        SSHSession *s = [sessions objectAtIndex:i];
+        if ([s isActive]) { active++; if (!target) target = s; }
+        if ([s window] == key || [[s portForwardController] window] == key) { target = s; active = 1; break; }
+    }
+    if (!target || active == 0) {
+        NSRunAlertPanel(@"Port Forwarding", @"Connect to a server first; forwarding uses that connection.", @"OK", nil, nil);
+        return;
+    }
+    [target openPortForwarding];
 }
 
 - (void)sessionDidEnd:(SSHSession *)session

@@ -1,6 +1,8 @@
 #import "SSHSession.h"
 #import "PromptPanel.h"
 #import "SFTPBrowser.h"
+#import "PortForward.h"
+#import "PortForwardController.h"
 #include "knownhosts.h"
 #include "rng.h"
 #include <string.h>
@@ -66,6 +68,10 @@ typedef socklen_t sock_len_t;
 - (void)closeSFTPChannel;
 - (void)sftpEnded:(NSString *)why;
 - (void)sftpBecameReady;
+- (void)pumpForwards;
+- (BOOL)findTunnelForChannel:(int)ch tunnel:(PortTunnel **)outT forward:(PortForward **)outPF;
+- (void)handleForwardEvent:(ssh_event *)ev tunnel:(PortTunnel *)t forward:(PortForward *)pf;
+- (void)stopAllForwards;
 @end
 
 /* strdup() is not ANSI C; keep the dependency out of the app. */
@@ -111,6 +117,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     sftpChannel = -1;
     exitStatus = -1;
     sb_init(&pendingIn);
+    forwards = [[NSMutableArray alloc] init];
     return self;
 }
 
@@ -121,6 +128,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     sb_free(&pendingIn);
     [host release]; [user release]; [keyPath release]; [knownHostsPath release];
     [window release]; [termView release]; [scroller release]; [browser release];
+    [forwards release]; [forwardController release];
     [super dealloc];
 }
 
@@ -347,7 +355,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
             return;
         }
     }
-    if (state != SESS_ENDED) { [self flushPending]; [self flushSFTP]; }
+    if (state != SESS_ENDED) { [self flushPending]; [self flushSFTP]; [self pumpForwards]; }
     [self refreshTitle];
 }
 
@@ -388,6 +396,13 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
 {
     ssh_event ev;
     while (state != SESS_ENDED && ssh_next_event(ssh, &ev)) {
+        {
+            PortTunnel *t; PortForward *pf;
+            if ([self findTunnelForChannel:ev.channel tunnel:&t forward:&pf]) {
+                [self handleForwardEvent:&ev tunnel:t forward:pf];
+                continue;
+            }
+        }
         if (sftpChannel >= 0 && ev.channel == sftpChannel &&
             (ev.type == SSH_EV_CHAN_OPEN || ev.type == SSH_EV_CHAN_OPEN_FAILED || ev.type == SSH_EV_CHAN_SUCCESS ||
              ev.type == SSH_EV_CHAN_FAILURE || ev.type == SSH_EV_CHAN_DATA || ev.type == SSH_EV_CHAN_EOF ||
@@ -567,6 +582,7 @@ New fingerprint:\n%@",
     [timer release];
     timer = nil;
     [self sftpEnded:msg];
+    [self stopAllForwards];
     if (fd >= 0) { close(fd); fd = -1; }
     if (ssh) { ssh_free(ssh); ssh = NULL; }
     channel = -1;
@@ -582,6 +598,7 @@ New fingerprint:\n%@",
 - (void)shutdown
 {
     [self sftpEnded:@"closed"];
+    [self stopAllForwards];
     if (browser) { [browser closeWindow]; }
     if (ssh && state != SESS_ENDED) ssh_disconnect(ssh, "user closed the window");
     if (ssh) [self flushOutput];
@@ -711,6 +728,153 @@ New fingerprint:\n%@",
 {
     if (sftpCore) { sftp_abort(sftpCore, why ? [why cString] : "connection closed"); sftp_free(sftpCore); sftpCore = NULL; }
     [browser sessionEnded];
+}
+
+/* ---------------------------------------------------------------- */
+/* port forwarding ("ssh -L": one direct-tcpip channel per tunneled connection)      */
+
+- (void)openPortForwarding
+{
+    if (state != SESS_ACTIVE || !ssh) {
+        NSRunAlertPanel(@"Port Forwarding", @"Log in first; forwarding uses this connection.", @"OK", nil, nil);
+        return;
+    }
+    if (!forwardController) forwardController = [[PortForwardController alloc] initWithSession:self];
+    [forwardController show];
+}
+
+- (PortForwardController *)portForwardController { return forwardController; }
+- (NSArray *)portForwards { return forwards; }
+
+- (PortForward *)addForwardWithLocalPort:(int)lp remoteHost:(NSString *)rh remotePort:(int)rp
+{
+    PortForward *pf;
+    if (state != SESS_ACTIVE || !ssh) return nil;
+    pf = [[[PortForward alloc] initWithLocalPort:lp remoteHost:rh remotePort:rp] autorelease];
+    if (![pf startListening]) return nil;
+    [forwards addObject:pf];
+    return pf;
+}
+
+- (void)removeForward:(PortForward *)pf
+{
+    [pf stopListening];                        /* also closes every tunnel's local socket right away */
+    [forwards removeObject:pf];
+}
+
+- (void)portForwardControllerClosed:(id)pfc
+{
+    if (pfc != forwardController) return;
+    [forwardController autorelease];                                  /* we are inside its windowWillClose: */
+    forwardController = nil;
+}
+
+/* One tick's worth of plain-socket I/O for every forward: accept new connections, relay bytes each
+ * way.  Data already received on a channel (SSH_EV_CHAN_DATA, handled in handleForwardEvent:) is
+ * buffered in outToLocal and flushed here rather than in the event handler, so a local socket that
+ * cannot take it all right away is retried on the next tick instead of blocking. */
+- (void)pumpForwards
+{
+    int fi, ti;
+    if (state != SESS_ACTIVE || !ssh) return;
+    for (fi = 0; fi < (int)[forwards count]; fi++) {
+        PortForward *pf = [forwards objectAtIndex:fi];
+        if (pf->listenFD >= 0) {
+            struct sockaddr_in a;
+            sock_len_t alen = sizeof(a);
+            int nfd = accept(pf->listenFD, (struct sockaddr *)&a, &alen);
+            if (nfd >= 0) {
+                int flags = fcntl(nfd, F_GETFL, 0);
+                PortTunnel *t = [[[PortTunnel alloc] init] autorelease];
+                fcntl(nfd, F_SETFL, flags | O_NONBLOCK);
+                t->localFD = nfd;
+                t->channel = ssh_channel_open_direct_tcpip(ssh, [pf->remoteHost cString], pf->remotePort,
+                                                            "127.0.0.1", pf->localPort);
+                if (t->channel < 0) close(nfd);
+                else [pf->tunnels addObject:t];
+            }
+        }
+        for (ti = 0; ti < (int)[pf->tunnels count]; ti++) {
+            PortTunnel *t = [pf->tunnels objectAtIndex:ti];
+            unsigned char buf[16384];
+            int n;
+
+            if (t->outToLocal.len) {
+                int w = send(t->localFD, (char *)t->outToLocal.p, t->outToLocal.len, 0);
+                if (w > 0) sb_consume(&t->outToLocal, (size_t)w);
+                else if (w < 0 && errno != EWOULDBLOCK && errno != EINTR) t->localClosed = t->remoteClosed = YES;
+            }
+            if (t->channelOpen && !t->localClosed && t->outToLocal.len == 0) {
+                n = recv(t->localFD, (char *)buf, sizeof(buf), 0);
+                if (n > 0) {
+                    ssh_channel_write(ssh, t->channel, buf, (size_t)n);
+                } else if (n == 0) {
+                    ssh_channel_eof(ssh, t->channel);
+                    t->localClosed = YES;
+                } else if (errno != EWOULDBLOCK && errno != EINTR) {
+                    t->localClosed = YES;
+                    if (t->channel >= 0) ssh_channel_close(ssh, t->channel);
+                }
+            }
+            if (t->localClosed && t->remoteClosed && t->outToLocal.len == 0) {
+                if (t->channel >= 0) { ssh_channel_close(ssh, t->channel); t->channel = -1; }
+                if (t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
+                [pf->tunnels removeObjectAtIndex:ti];
+                ti--;
+            }
+        }
+    }
+    [self flushOutput];
+    if (forwardController) [forwardController reload];                 /* connection counts may have changed */
+}
+
+- (BOOL)findTunnelForChannel:(int)ch tunnel:(PortTunnel **)outT forward:(PortForward **)outPF
+{
+    int fi, ti;
+    if (ch < 0) return NO;
+    for (fi = 0; fi < (int)[forwards count]; fi++) {
+        PortForward *pf = [forwards objectAtIndex:fi];
+        for (ti = 0; ti < (int)[pf->tunnels count]; ti++) {
+            PortTunnel *t = [pf->tunnels objectAtIndex:ti];
+            if (t->channel == ch) { *outT = t; *outPF = pf; return YES; }
+        }
+    }
+    return NO;
+}
+
+- (void)handleForwardEvent:(ssh_event *)ev tunnel:(PortTunnel *)t forward:(PortForward *)pf
+{
+    switch (ev->type) {
+    case SSH_EV_CHAN_OPEN:
+        t->channelOpen = YES;
+        break;
+    case SSH_EV_CHAN_OPEN_FAILED:                                       /* the server could not reach host:port */
+        t->channel = -1;
+        if (t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
+        [pf->tunnels removeObject:t];
+        break;
+    case SSH_EV_CHAN_DATA:
+        sb_put(&t->outToLocal, ev->data, ev->len);                      /* flushed to the socket in pumpForwards */
+        break;
+    case SSH_EV_CHAN_EOF:
+        t->remoteClosed = YES;
+        break;
+    case SSH_EV_CHAN_CLOSE:
+        t->channel = -1;
+        if (t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
+        [pf->tunnels removeObject:t];
+        break;
+    default:
+        break;
+    }
+}
+
+- (void)stopAllForwards
+{
+    int i;
+    for (i = 0; i < (int)[forwards count]; i++) [[forwards objectAtIndex:i] stopListening];
+    [forwards removeAllObjects];
+    if (forwardController) { [forwardController closeWindow]; }
 }
 
 /* ---------------------------------------------------------------- */

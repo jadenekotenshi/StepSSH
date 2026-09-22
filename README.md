@@ -16,8 +16,10 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), drag files/folders from Workspace's File Viewer onto the browser to upload, new folder, rename, delete |
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
 | Safety | known_hosts checking (plain, wildcard, hashed), strict-KEX (Terrapin) mitigation, refuses to run on a weak RNG |
+| Forwarding | local port forwarding ("ssh -L"), any number of rules, managed from *Connection > Port Forwarding...* while connected |
 
-**Not supported:** compression, port forwarding, agent forwarding, X11, IPv6, middle-click (mouse reporting
+**Not supported:** compression, *remote* port forwarding ("ssh -R") or dynamic/SOCKS forwarding ("ssh -D"
+-- see Port forwarding below), agent forwarding, X11, IPv6, middle-click (mouse reporting
 covers left/right and the wheel only -- see Mouse reporting below), dragging files *out* of the SFTP
 browser to download (see Drag-and-drop below), recursive folder *deletion* (only individual files and
 empty folders), RSA/ECDSA key
@@ -192,6 +194,25 @@ make -f Makefile.openstep OPT="-O2 -fomit-frame-pointer"    # then build with th
 Set `OPT`, not `CFLAGS`: overriding `CFLAGS` would drop `-DOPENSTEP` and the include paths.
 Only the C core is sensitive to this; the Objective-C app is limited by the display and network.
 
+## Port forwarding
+
+*Connection > Port Forwarding...*, available once connected, opens a small window listing this
+connection's forwarding rules: a local port, and the host:port on the other side of the connection
+that port relays to (`ssh -L localport:host:port`). *Add...* asks for the three, binds the local port
+immediately (127.0.0.1 only -- a forward is never exposed to the rest of the network, the same default
+OpenSSH itself uses without `GatewayPorts`), and starts relaying; *Remove* stops it and disconnects
+anything using it. Any number of rules can be active together, and each one accepts any number of
+simultaneous connections (e.g. several browser tabs through the same forwarded port) -- every one of
+those becomes its own SSH channel (`direct-tcpip`, RFC 4254 s.7.2) on the same connection, alongside
+the terminal and file browser's channels.
+
+**Not implemented: remote forwarding (`ssh -R`) or dynamic/SOCKS forwarding (`ssh -D`).** Remote
+forwarding would mean accepting a server-initiated channel open, which this client's connection layer
+categorically refuses (every unsolicited `CHANNEL_OPEN` gets an "administratively prohibited" refusal,
+on purpose: a client should not silently let a server open connections through it); dynamic forwarding
+would mean implementing a small SOCKS4/5 server. Both are plausible future additions on top of the same
+`direct-tcpip` machinery local forwarding already uses, just not attempted in this pass.
+
 ## Mouse reporting
 
 When the remote program asks for it (vim, tmux, htop, mc, and most full-screen terminal apps that use
@@ -249,6 +270,7 @@ core/   SSH engine. Pure C89, no I/O: feed it bytes, drain its output and events
 term/   vt.c (terminal emulator core), nsenc.c (NeXTSTEP <-> Unicode)
 app/    Objective-C, all UI built in code (no nibs):
         AppController ConnectController KeyGenController SSHSession SFTPBrowser
+        PortForward PortForwardController
         TerminalView PromptPanel SecretField UIHelpers Compat.h main.m
         SecureShell.iconheader, SecureShell.tiff   the application icon (linked in as __ICON)
 tests/  unit tests, interop.sh, session/UI smoke tests, tests/keys/ (real ssh-keygen output)
