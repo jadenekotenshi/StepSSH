@@ -269,6 +269,105 @@ static void test_keys_dirty(void)
     vt_free(t);
 }
 
+static void test_mouse(void)
+{
+    /* Expected bytes below are computed by hand from the formula verified against real xterm's
+     * button.c (BtnCode/EditorButton): base 0, +4/+8/+16 shift/meta/ctrl, +32 motion, then the
+     * button number, +3 for "no button" (release in the default encoding, or any-event motion with
+     * nothing held), or +64/+65 for the wheel; the default encoding then adds 32 to make a byte.
+     * SGR's release is the one place that differs: it keeps the real button number and a trailing
+     * 'm', rather than folding release into that ambiguous +3. */
+    unsigned char b[32];
+    int n;
+    vt *t = vt_new(80, 24, 0);
+
+    CHECK(t->mouse_mode == 0 && t->mouse_sgr == 0 && t->mouse_focus == 0);
+    CHECK(vt_encode_mouse(t, 0, 1, 1, 0, 0, 0, b) == 0);            /* off: nothing to send */
+
+    /* X10 (9): press only, no release, no motion, ever */
+    feed(t, "\033[?9h");
+    CHECK(t->mouse_mode == 9);
+    n = vt_encode_mouse(t, 0, 1, 1, 0, 0, 0, b);
+    CHECK(n == 6 && memcmp(b, "\033[M !!", 6) == 0);                /* code 0 -> ' '; col/row 1 -> '!' */
+    n = vt_encode_mouse(t, 2, 5, 3, 0, 0, 0, b);
+    CHECK(n == 6 && memcmp(b, "\033[M\"%#", 6) == 0);                /* code 2 -> '"'; col 5 -> '%'; row 3 -> '#' */
+    CHECK(vt_encode_mouse(t, 0, 1, 1, 0, 0, 1, b) == 0);            /* X10 does not report release */
+    CHECK(vt_encode_mouse(t, 0, 1, 1, 0, 1, 0, b) == 0);            /* nor motion */
+
+    /* Normal tracking (1000): press and release, no motion */
+    feed(t, "\033[?9l\033[?1000h");
+    CHECK(t->mouse_mode == 1000);
+    n = vt_encode_mouse(t, 0, 1, 1, 0, 0, 0, b);
+    CHECK(n == 6 && memcmp(b, "\033[M !!", 6) == 0);
+    n = vt_encode_mouse(t, 0, 1, 1, 0, 0, 1, b);                    /* release: ambiguous code 3 -> '#' */
+    CHECK(n == 6 && memcmp(b, "\033[M#!!", 6) == 0);
+    n = vt_encode_mouse(t, 0, 1, 1, VT_MOD_SHIFT | VT_MOD_CTRL, 0, 0, b);   /* code 0+4+16=20 -> '4' */
+    CHECK(n == 6 && memcmp(b, "\033[M4!!", 6) == 0);
+    CHECK(vt_encode_mouse(t, 0, 1, 1, 0, 1, 0, b) == 0);            /* "normal" mode still has no motion */
+
+    /* Button-event tracking (1002): + motion while a button is held, not with none held */
+    feed(t, "\033[?1000l\033[?1002h");
+    CHECK(t->mouse_mode == 1002);
+    n = vt_encode_mouse(t, 0, 10, 10, 0, 1, 0, b);                  /* code 0+32=32 -> '@' (the doc's own example) */
+    CHECK(n == 6 && memcmp(b, "\033[M@", 3) == 0);
+    n = vt_encode_mouse(t, 2, 10, 10, 0, 1, 0, b);                  /* code 2+32=34 -> 'B' (ditto, button 3) */
+    CHECK(n == 6 && memcmp(b, "\033[MB", 3) == 0);
+    CHECK(vt_encode_mouse(t, -1, 10, 10, 0, 1, 0, b) == 0);         /* motion with nothing held: any-event only */
+
+    /* Any-event tracking (1003): motion is reported even with nothing held */
+    feed(t, "\033[?1002l\033[?1003h");
+    CHECK(t->mouse_mode == 1003);
+    n = vt_encode_mouse(t, -1, 1, 1, 0, 1, 0, b);                   /* code 3+32=35 -> 'C' */
+    CHECK(n == 6 && memcmp(b, "\033[MC!!", 6) == 0);
+
+    /* Wheel: buttons 4/5, always a "press" (64/65), never a release */
+    n = vt_encode_mouse(t, 4, 1, 1, 0, 0, 0, b);
+    CHECK(n == 6 && b[3] == 32 + 64);
+    n = vt_encode_mouse(t, 5, 1, 1, 0, 0, 0, b);
+    CHECK(n == 6 && b[3] == 32 + 65);
+    CHECK(vt_encode_mouse(t, 4, 1, 1, 0, 0, 1, b) == 0);
+
+    /* Default encoding clamps coordinates beyond 223 rather than overflowing a byte */
+    n = vt_encode_mouse(t, 0, 300, 300, 0, 0, 0, b);
+    CHECK(n == 6 && b[4] == 255 && b[5] == 255);
+
+    /* Mutual exclusivity: switching straight from 1003 to 1002 without an explicit disable first,
+     * then a STALE disable of 1000 (never actually active) must not clobber the real, active mode */
+    feed(t, "\033[?1002h\033[?1000l");
+    CHECK(t->mouse_mode == 1002);
+    CHECK(vt_encode_mouse(t, 0, 1, 1, 0, 1, 0, b) != 0);            /* still 1002: motion still reported */
+
+    /* SGR (1006): decimal, no 223-cell limit, and release keeps the real button with a trailing 'm' --
+     * the one case that is NOT the same code as the default encoding's release. */
+    feed(t, "\033[?1006h");
+    CHECK(t->mouse_sgr == 1);
+    n = vt_encode_mouse(t, 0, 1, 1, 0, 0, 0, b); b[n] = 0;
+    CHECK(strcmp((char *)b, "\033[<0;1;1M") == 0);
+    n = vt_encode_mouse(t, 0, 1, 1, 0, 0, 1, b); b[n] = 0;          /* SGR release: button 0, trailing 'm' */
+    CHECK(strcmp((char *)b, "\033[<0;1;1m") == 0);
+    n = vt_encode_mouse(t, 2, 1, 1, 0, 0, 1, b); b[n] = 0;          /* release of a DIFFERENT button: not ambiguous */
+    CHECK(strcmp((char *)b, "\033[<2;1;1m") == 0);
+    n = vt_encode_mouse(t, 0, 1, 1, VT_MOD_SHIFT, 0, 0, b); b[n] = 0;
+    CHECK(strcmp((char *)b, "\033[<4;1;1M") == 0);
+    n = vt_encode_mouse(t, 1, 1, 1, 0, 1, 0, b); b[n] = 0;          /* motion, button held: 1+32=33 */
+    CHECK(strcmp((char *)b, "\033[<33;1;1M") == 0);
+    n = vt_encode_mouse(t, 5, 1, 1, 0, 0, 0, b); b[n] = 0;
+    CHECK(strcmp((char *)b, "\033[<65;1;1M") == 0);
+    n = vt_encode_mouse(t, 0, 300, 50, 0, 0, 0, b); b[n] = 0;       /* SGR: no clamping at 223 */
+    CHECK(strcmp((char *)b, "\033[<0;300;50M") == 0);
+
+    /* focus events (1004): just a mode flag, encoded directly by the caller (a fixed CSI I / CSI O) */
+    feed(t, "\033[?1004h");
+    CHECK(t->mouse_focus == 1);
+    feed(t, "\033[?1004l");
+    CHECK(t->mouse_focus == 0);
+
+    vt_reset(t);
+    CHECK(t->mouse_mode == 0 && t->mouse_sgr == 0 && t->mouse_focus == 0);
+    CHECK(vt_encode_mouse(t, 0, 1, 1, 0, 0, 0, b) == 0);
+    vt_free(t);
+}
+
 static void test_fuzz(void)
 {
     /* Hostile/garbage input must never crash, hang or corrupt memory (run under ASan). */
@@ -300,6 +399,6 @@ int main(void)
 {
     test_basic(); test_wrap(); test_erase_edit(); test_sgr(); test_scroll();
     test_alt_screen(); test_tabs_modes(); test_replies_title(); test_utf8_charsets();
-    test_nsenc(); test_resize(); test_keys_dirty(); test_fuzz();
+    test_nsenc(); test_resize(); test_keys_dirty(); test_mouse(); test_fuzz();
     TEST_DONE("vt");
 }

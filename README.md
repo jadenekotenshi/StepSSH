@@ -8,7 +8,7 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 
 | Feature | Detail |
 |---|---|
-| Terminal | VT100/xterm subset, 256 colours, scrollback, alternate screen (vi, less, tmux), copy/paste, function keys |
+| Terminal | VT100/xterm subset, 256 colours, scrollback, alternate screen (vi, less, tmux), copy/paste, function keys, mouse reporting (click, drag, wheel -- for vim, tmux and the like) |
 | Key exchange | curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group-exchange-sha256, group16-sha512, group14-sha256, group14-sha1 (last resort) |
 | Host keys | ssh-ed25519, ecdsa-sha2-nistp256/384/521, RSA (rsa-sha2-512, rsa-sha2-256, and legacy SHA-1 ssh-rsa) |
 | Ciphers / MACs | chacha20-poly1305, aes256/128-ctr; hmac-sha2-256/512 (+etm); **legacy, chosen only if nothing better is offered:** aes256/128-cbc, hmac-sha1 (+etm) |
@@ -17,9 +17,10 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
 | Safety | known_hosts checking (plain, wildcard, hashed), strict-KEX (Terrapin) mitigation, refuses to run on a weak RNG |
 
-**Not supported:** compression, port forwarding, agent forwarding, X11, IPv6, mouse reporting, dragging
-files *out* of the SFTP browser to download (see Drag-and-drop below), recursive folder *deletion* (only
-individual files and empty folders), RSA/ECDSA key
+**Not supported:** compression, port forwarding, agent forwarding, X11, IPv6, middle-click (mouse reporting
+covers left/right and the wheel only -- see Mouse reporting below), dragging files *out* of the SFTP
+browser to download (see Drag-and-drop below), recursive folder *deletion* (only individual files and
+empty folders), RSA/ECDSA key
 *generation* (ed25519 only), 3DES, 1024-bit diffie-hellman-group1-sha1, DSA keys, encrypted PKCS#8
 keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
@@ -190,6 +191,30 @@ make -f Makefile.openstep OPT="-O2 -fomit-frame-pointer"    # then build with th
 
 Set `OPT`, not `CFLAGS`: overriding `CFLAGS` would drop `-DOPENSTEP` and the include paths.
 Only the C core is sensitive to this; the Objective-C app is limited by the display and network.
+
+## Mouse reporting
+
+When the remote program asks for it (vim, tmux, htop, mc, and most full-screen terminal apps that use
+the mouse), clicks, drags and the scroll wheel are sent to it instead of doing local text selection or
+scrolling -- e.g. clicking to move vim's cursor or resize a tmux pane, or scrolling a pane's history.
+Hold **Shift** to bypass this and get ordinary local selection/scrolling regardless, the same override
+real xterm uses.
+
+Supported: X10 (click only), normal (click and release), button-event and any-event tracking (also
+drag motion, respectively only while a button is held or always), SGR extended coordinates (what
+vim/tmux request by default; needed for terminals wider or taller than 223 cells), and focus-in/out
+events. The left and right buttons are both reported; **the middle button is not** (`otherMouseDown:`
+and friends were not confirmed as available on OPENSTEP 4.2's AppKit, unlike `rightMouseDown:`, which
+has been part of NSResponder since NeXTSTEP). Highlight tracking (mode 1001) is deliberately not
+implemented: it requires a cooperating program on the host, and xterm's own documentation warns that
+getting it wrong can hang a real xterm.
+
+The wire encoding (`term/vt.c`'s `vt_encode_mouse`) was checked bit-for-bit against real xterm's own
+source (`button.c`'s `BtnCode`/`EditorButton`), not just its written documentation -- one detail (which
+code represents "no button" during any-event motion, and that SGR's release differs from the default
+encoding's) is not spelled out in the xterm control-sequences document and was only caught this way.
+36 unit tests in `tests/test_vt.c` and 12 UI-level tests in `tests/ui_smoke.m` cover it, all against
+hand-computed expected bytes.
 
 ## Drag-and-drop
 

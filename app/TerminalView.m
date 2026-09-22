@@ -23,6 +23,9 @@ static int iceil(float x)  { int i = (int)x; return (x > (float)i) ? i + 1 : i; 
 - (void)markDirty;
 - (void)sendString:(NSString *)s;
 - (void)escTimeout:(NSTimer *)timer;
+- (BOOL)reportMouseLine:(int)line col:(int)col button:(int)button flags:(unsigned)flags
+                  motion:(int)motion release:(int)release;
+- (BOOL)beginMouseReport:(NSEvent *)theEvent button:(int)button;
 @end
 
 @implementation TerminalView
@@ -478,6 +481,54 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
 }
 
 /* ---------------------------------------------------------------- */
+/* mouse reporting (xterm protocol; see term/vt.h)                  */
+
+/* Encodes and sends one event, if the terminal's currently enabled mode reports it (vt_encode_mouse
+ * says no by returning 0, e.g. motion under a mode that does not track it). line/col are in the same
+ * scrollback-relative, possibly out-of-range convention pointToCell: uses for local selection; clamped
+ * to the visible grid and made 1-based here, since the wire protocol has no notion of scrollback.
+ * Motion reports are suppressed when the cell has not changed, matching xterm itself ("only if the
+ * mouse pointer has moved to a different character cell"). Returns whether anything was sent. */
+- (BOOL)reportMouseLine:(int)line col:(int)col button:(int)button flags:(unsigned)flags
+                  motion:(int)motion release:(int)release
+{
+    unsigned char out[16];
+    int mods = 0, n;
+    if (flags & NSShiftKeyMask)     mods |= VT_MOD_SHIFT;
+    if (flags & NSAlternateKeyMask) mods |= VT_MOD_ALT;
+    if (flags & NSControlKeyMask)   mods |= VT_MOD_CTRL;
+    if (line < 0) line = 0;
+    if (line >= rows) line = rows - 1;
+    if (col < 0) col = 0;
+    if (col >= cols) col = cols - 1;
+    if (motion && line == mouseLastReportLine && col == mouseLastReportCol) return NO;
+    n = vt_encode_mouse(term, button, col + 1, line + 1, mods, motion, release, out);
+    if (!n) return NO;
+    [delegate terminalView:self sendBytes:out length:n];
+    mouseLastReportLine = line; mouseLastReportCol = col;
+    return YES;
+}
+
+/* Called from mouseDown:/rightMouseDown: to decide, once, whether this whole gesture (through the
+ * matching mouseUp:) is a report to the host or ordinary local interaction (selection, for the left
+ * button) -- holding Shift always forces local interaction, the same override xterm itself uses.
+ * Returns YES (and has already sent the press) if the caller should do nothing further. */
+- (BOOL)beginMouseReport:(NSEvent *)theEvent button:(int)button
+{
+    NSPoint p;
+    int line, col;
+    if (!term->mouse_mode || ([theEvent modifierFlags] & NSShiftKeyMask)) { mouseReportingActive = NO; return NO; }
+    [[self window] makeFirstResponder:self];
+    p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+    [self pointToCell:p line:&line col:&col];
+    mouseReportingActive = YES;
+    mouseReportButton = button;
+    mouseLastReportLine = -1; mouseLastReportCol = -1;    /* out of range: the first motion report always goes through */
+    [self reportMouseLine:line col:col button:button flags:[theEvent modifierFlags] motion:0 release:0];
+    return YES;
+}
+
+/* ---------------------------------------------------------------- */
 /* selection, copy, paste                                           */
 
 - (BOOL)isWordChar:(unsigned short)ch
@@ -489,10 +540,13 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
 
 - (void)mouseDown:(NSEvent *)theEvent
 {
-    NSPoint p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+    NSPoint p;
     int line, col, w, e;
     const vt_cell *cells;
 
+    if ([self beginMouseReport:theEvent button:0]) return;   /* an app wants clicks: hold shift for local selection */
+
+    p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
     [[self window] makeFirstResponder:self];
     [self pointToCell:p line:&line col:&col];
     selAnchorLine = selEndLine = line;
@@ -518,10 +572,49 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
     NSPoint p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
     int line, col;
     [self pointToCell:p line:&line col:&col];
+    if (mouseReportingActive) {
+        [self reportMouseLine:line col:col button:mouseReportButton flags:[theEvent modifierFlags] motion:1 release:0];
+        return;
+    }
     if (line != selEndLine || col != selEndCol || !selActive) {
         selEndLine = line; selEndCol = col; selActive = 1;
         [self setNeedsDisplay:YES];
     }
+}
+
+- (void)mouseUp:(NSEvent *)theEvent
+{
+    NSPoint p;
+    int line, col;
+    if (!mouseReportingActive) return;
+    p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+    [self pointToCell:p line:&line col:&col];
+    [self reportMouseLine:line col:col button:mouseReportButton flags:[theEvent modifierFlags] motion:0 release:1];
+    mouseReportingActive = NO;
+}
+
+- (void)rightMouseDown:(NSEvent *)theEvent { [self beginMouseReport:theEvent button:2]; }
+- (void)rightMouseDragged:(NSEvent *)theEvent
+{
+    if (!mouseReportingActive) return;
+    [self mouseDragged:theEvent];
+}
+- (void)rightMouseUp:(NSEvent *)theEvent { [self mouseUp:theEvent]; }
+
+- (void)scrollWheel:(NSEvent *)theEvent
+{
+    float dy = [theEvent deltaY];
+    if (dy == 0.0) return;
+    if (term->mouse_mode && !([theEvent modifierFlags] & NSShiftKeyMask)) {
+        NSPoint p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+        int line, col;
+        [self pointToCell:p line:&line col:&col];
+        [self reportMouseLine:line col:col button:(dy > 0.0 ? 4 : 5) flags:[theEvent modifierFlags]
+                        motion:0 release:0];
+        return;
+    }
+    [self scrollByLines:(dy > 0.0 ? 3 : -3)];      /* a fixed step per wheel event: robust to whatever
+                                                     * granularity this hardware's NSEvent deltaY uses */
 }
 
 - (NSString *)selectedText
@@ -590,7 +683,19 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
     [self setNeedsDisplay:YES];
 }
 
-- (BOOL)becomeFirstResponder { [self setNeedsDisplay:YES]; return YES; }
-- (BOOL)resignFirstResponder { [self setNeedsDisplay:YES]; return YES; }
+- (BOOL)becomeFirstResponder
+{
+    [self setNeedsDisplay:YES];
+    if (term->mouse_focus) { unsigned char seq[3]; seq[0] = 033; seq[1] = '['; seq[2] = 'I';
+        [delegate terminalView:self sendBytes:seq length:3]; }
+    return YES;
+}
+- (BOOL)resignFirstResponder
+{
+    [self setNeedsDisplay:YES];
+    if (term->mouse_focus) { unsigned char seq[3]; seq[0] = 033; seq[1] = '['; seq[2] = 'O';
+        [delegate terminalView:self sendBytes:seq length:3]; }
+    return YES;
+}
 
 @end

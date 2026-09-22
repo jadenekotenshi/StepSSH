@@ -81,6 +81,12 @@ static void spin(double seconds)
 {
     [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
 }
+
+static NSEvent *mouse_event(NSEventType type, float x, float y, unsigned mods)
+{
+    return [NSEvent mouseEventWithType:type location:NSMakePoint(x, y) modifierFlags:mods timestamp:0
+                          windowNumber:0 context:nil eventNumber:0 clickCount:1 pressure:1.0];
+}
 #define EXPECT(cond, what) do { if (cond) pass++; else { fail++; printf("  FAIL: %s\n", what); } } while (0)
 
 static int shown_contains(const char *text)
@@ -276,6 +282,68 @@ int main(int argc, char *argv[])
         spin(0.12);
         EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 0x1b,
                "ESC with nothing following within the window is sent on its own after a short wait");
+
+        /* 4c. mouse reporting (xterm protocol; see term/vt.h).  Two points chosen only to land, via
+         * pointToCell:'s own clamping, on the top-left and bottom-right cells -- exact pixel math
+         * would need MARGIN/cellW/cellH, which are private to TerminalView. */
+        {
+            vt *mt = [tv terminal];
+            NSPoint topLeft = NSMakePoint(-1000.0, 1000000.0), botRight = NSMakePoint(1000000.0, -1000000.0);
+
+            kc->calls = 0;
+            [tv mouseDown:mouse_event(NSLeftMouseDown, topLeft.x, topLeft.y, 0)];
+            EXPECT(kc->calls == 0, "a plain click with mouse reporting off is ordinary local selection");
+
+            vt_write(mt, (const unsigned char *)"[?1000h", 8);          /* normal tracking */
+            kc->calls = 0;
+            [tv mouseDown:mouse_event(NSLeftMouseDown, topLeft.x, topLeft.y, 0)];
+            EXPECT(kc->calls == 1 && kc->n == 6 && memcmp(kc->bytes, "[M !!", 6) == 0,
+                   "a left click at the top-left cell reports button 0 at 1,1");
+            kc->calls = 0;
+            [tv mouseDragged:mouse_event(NSLeftMouseDragged, botRight.x, botRight.y, 0)];
+            EXPECT(kc->calls == 0, "normal tracking (1000) does not report drag motion at all");
+            kc->calls = 0;
+            [tv mouseUp:mouse_event(NSLeftMouseUp, botRight.x, botRight.y, 0)];
+            EXPECT(kc->calls == 1 && kc->n == 6 && kc->bytes[3] == ' ' + 3,
+                   "release reports the ambiguous code 3, at wherever the button actually came up");
+
+            vt_write(mt, (const unsigned char *)"[?1000l[?1002h", 16);   /* button-event tracking */
+            [tv mouseDown:mouse_event(NSLeftMouseDown, topLeft.x, topLeft.y, 0)];
+            kc->calls = 0;
+            [tv mouseDragged:mouse_event(NSLeftMouseDragged, topLeft.x, topLeft.y, 0)];
+            EXPECT(kc->calls == 0, "a drag reported for the SAME cell again is suppressed (xterm dedups this)");
+            [tv mouseDragged:mouse_event(NSLeftMouseDragged, botRight.x, botRight.y, 0)];
+            EXPECT(kc->calls == 1 && kc->bytes[3] == ' ' + 32,
+                   "a drag into a DIFFERENT cell reports motion (code 0+32, button 0 held)");
+            [tv mouseUp:mouse_event(NSLeftMouseUp, botRight.x, botRight.y, 0)];
+
+            kc->calls = 0;
+            [tv mouseDown:mouse_event(NSLeftMouseDown, topLeft.x, topLeft.y, NSShiftKeyMask)];
+            EXPECT(kc->calls == 0, "Shift+click overrides mouse reporting for local selection, as in real xterm");
+            [tv mouseUp:mouse_event(NSLeftMouseUp, topLeft.x, topLeft.y, NSShiftKeyMask)];
+
+            kc->calls = 0;
+            [tv rightMouseDown:mouse_event(NSRightMouseDown, topLeft.x, topLeft.y, 0)];
+            EXPECT(kc->calls == 1 && kc->n == 6 && (kc->bytes[3] & 3) == 2, "a right click's press reports button 2");
+            kc->calls = 0;
+            [tv rightMouseUp:mouse_event(NSRightMouseUp, topLeft.x, topLeft.y, 0)];
+            EXPECT(kc->calls == 1 && kc->n == 6, "and its release is reported too");
+
+            vt_write(mt, (const unsigned char *)"[?1004h", 8);          /* focus events */
+            kc->calls = 0;
+            [tv resignFirstResponder];
+            EXPECT(kc->calls == 1 && kc->n == 3 && memcmp(kc->bytes, "[O", 3) == 0, "losing focus reports CSI O");
+            [tv becomeFirstResponder];
+            EXPECT(kc->calls == 2 && kc->n == 3 && memcmp(kc->bytes, "[I", 3) == 0, "gaining focus reports CSI I");
+            vt_write(mt, (const unsigned char *)"[?1004l", 8);
+            kc->calls = 0;
+            [tv resignFirstResponder]; [tv becomeFirstResponder];
+            EXPECT(kc->calls == 0, "and nothing is reported once focus events are turned back off");
+
+            mt->mouse_mode = 0; mt->mouse_sgr = 0; mt->mouse_focus = 0;   /* not vt_reset(): that would
+                                                                          * wipe the screen content
+                                                                          * section 5 still needs */
+        }
 
         /* 5. selection */
         [tv selectAll:nil];

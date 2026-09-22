@@ -478,6 +478,15 @@ static void set_mode(vt *t, int priv, int m, int on)
             else    { switch_screen(t, 0); restore_cursor(t, 1); }
             break;
         case 2004: t->bracketed_paste = on; break;
+        case 9: case 1000: case 1002: case 1003:
+            /* these four are mutually exclusive: setting one replaces whatever was active, but
+             * disabling one that ISN'T the active mode (a stale/blanket cleanup sequence) must not
+             * clobber a different mode a later "h" already switched to */
+            if (on) t->mouse_mode = m;
+            else if (t->mouse_mode == m) t->mouse_mode = 0;
+            break;
+        case 1006: t->mouse_sgr = on; break;
+        case 1004: t->mouse_focus = on; break;
         default: break;
         }
     } else if (priv == 0) {
@@ -739,6 +748,7 @@ void vt_reset(vt *t)
     t->autowrap = 1; t->origin = 0; t->insert = 0; t->newline_mode = 0;
     t->cursor_visible = 1; t->reverse_screen = 0;
     t->app_cursor = 0; t->app_keypad = 0; t->bracketed_paste = 0;
+    t->mouse_mode = 0; t->mouse_sgr = 0; t->mouse_focus = 0;
     t->g0 = t->g1 = 0; t->shift = 0;
     t->state = ST_GROUND;
     t->utf8_left = 0;
@@ -921,6 +931,62 @@ int vt_encode_key(const vt *t, int key, int mods, unsigned char *out)
     if (m != 1) { out[n++] = ';'; n = put_int(out, n, m); }
     out[n++] = '~';
     return n;
+}
+
+/* Bit layout verified against real xterm (button.c: BtnCode/EditorButton), not guessed: base 0, +4/+8/+16
+ * for shift/meta(alt)/ctrl, +32 for motion, then the button number (0/1/2), +3 for "no button" (a
+ * release in the default encoding, or motion with nothing held -- xterm computes this by passing
+ * button = -1 into the same BtnCode() either way, in EVERY encoding), or +64/+65 for the wheel.
+ * The one place encodings genuinely differ: SGR's release keeps the real button number and switches
+ * the trailing letter to 'm' instead of folding release into that ambiguous +3 -- xterm's ButtonRelease
+ * case only substitutes button = -1 for the default encoding, leaving it alone under SGR/pixel-position. */
+int vt_encode_mouse(const vt *t, int button, int col, int row, int mods, int motion, int release,
+                     unsigned char *out)
+{
+    int code, n;
+
+    if (!t->mouse_mode) return 0;
+    if (motion) {
+        if (button < 0) { if (t->mouse_mode != 1003) return 0; }             /* no button: any-event only */
+        else if (t->mouse_mode != 1002 && t->mouse_mode != 1003) return 0;   /* a button: needs 1002 or 1003 */
+    } else if (release) {
+        if (t->mouse_mode == 9) return 0;      /* X10 reports presses only */
+        if (button >= 4) return 0;             /* wheel buttons never send a release (xterm doesn't either) */
+    }
+    /* a plain press is valid in every mode */
+
+    code = 0;
+    if (mods & VT_MOD_SHIFT) code += 4;
+    if (mods & VT_MOD_ALT)   code += 8;         /* xterm's "meta" */
+    if (mods & VT_MOD_CTRL)  code += 16;
+    if (motion) code += 32;
+
+    if (button >= 4) code += 64 + (button - 4);
+    else if (motion && button < 0) code += 3;                       /* any-event: moving, nothing held */
+    else if (release && !motion && !t->mouse_sgr) code += 3;        /* default encoding: ambiguous release */
+    else code += (button < 0 ? 0 : button);                        /* press, drag, or an SGR release */
+
+    if (t->mouse_sgr) {                         /* mode 1006: decimal, no 223-cell limit, own release letter */
+        n = put_str(out, 0, "\033[<");
+        n = put_int(out, n, code);
+        out[n++] = ';';
+        n = put_int(out, n, col);
+        out[n++] = ';';
+        n = put_int(out, n, row);
+        out[n++] = (release && !motion) ? 'm' : 'M';
+        return n;
+    }
+
+    /* default X10-derived encoding: three raw bytes, each value+32, so coordinates beyond 223 (255-32)
+     * cannot be represented -- clamped here rather than left to overflow an unsigned char and corrupt
+     * the sequence. */
+    if (col > 223) col = 223;
+    if (row > 223) row = 223;
+    out[0] = 033; out[1] = '['; out[2] = 'M';
+    out[3] = (unsigned char)(32 + code);
+    out[4] = (unsigned char)(32 + col);
+    out[5] = (unsigned char)(32 + row);
+    return 6;
 }
 
 vt_u16 vt_fallback_char(vt_u16 cp)

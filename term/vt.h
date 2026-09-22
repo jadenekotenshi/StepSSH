@@ -59,6 +59,15 @@ typedef struct vt {
     int app_cursor, app_keypad, bracketed_paste;
     int utf8;
 
+    /* mouse reporting: mouse_mode is 0 (off), 9 (X10: press only), 1000 (normal: press+release),
+     * 1002 (+ motion while a button is held) or 1003 (+ motion with no button held).  1001
+     * (highlight tracking) is not supported: it requires a cooperating program on the host and can
+     * otherwise hang a real xterm, so is not worth the risk here.  mouse_sgr is mode 1006 (decimal
+     * coordinates with no 223-cell limit, what vim/tmux request by default); without it, coordinates
+     * beyond 223 cannot be represented and are clamped, per the X10-derived protocol's own limit.
+     * mouse_focus is mode 1004 (report focus in/out). */
+    int mouse_mode, mouse_sgr, mouse_focus;
+
     /* saved cursor (DECSC) and the one used by mode 1049 */
     vt_saved saved, saved_alt;
 
@@ -119,6 +128,14 @@ enum {
 #define VT_MOD_ALT   2
 #define VT_MOD_CTRL  4
 int  vt_encode_key(const vt *t, int key, int mods, unsigned char *out);   /* returns byte count */
+
+/* Mouse.  col/row are 1-based cell coordinates (the wire protocol's own convention; the caller clamps
+ * to the visible grid).  button is 0/1/2 for left/middle/right, 4/5 for the wheel (up/down), or -1 for
+ * a motion event with no button held.  Returns 0 (nothing to send) if mouse reporting is off, or this
+ * event isn't one the currently enabled mode reports (e.g. motion under plain "normal" tracking, or a
+ * release under X10 mode, which -- per the protocol -- report only presses). */
+int  vt_encode_mouse(const vt *t, int button, int col, int row, int mods, int motion, int release,
+                      unsigned char *out);
 
 /* Display helpers */
 vt_u16 vt_fallback_char(vt_u16 cp);     /* map box drawing/graphics to plain ASCII */

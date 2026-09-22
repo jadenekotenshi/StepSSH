@@ -28,6 +28,13 @@
      * bare Escape keypress from the start of a multi-byte special-key sequence. */
     BOOL        escPending;
     NSTimer    *escTimer;
+
+    /* Mouse reporting (xterm protocol; see term/vt.h's vt_encode_mouse).  Whether the gesture that
+     * began at the last mouseDown/rightMouseDown is being sent to the host rather than treated as
+     * local text selection is decided once, at that mouseDown, and held for the whole gesture. */
+    BOOL        mouseReportingActive;
+    int         mouseReportButton;                    /* which button, for this gesture's drag/up events */
+    int         mouseLastReportLine, mouseLastReportCol;  /* last cell a motion report was sent for */
     NSColor   *defaultFg, *defaultBg;
     NSColor   *palette[256];
 }
