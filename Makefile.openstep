@@ -2,6 +2,7 @@
 #
 #   make -f Makefile.openstep test     # FIRST: run the C unit tests on the real compiler
 #   make -f Makefile.openstep          # build SecureShell.app
+#   make -f Makefile.openstep fat      # SecureShell.app as an i386+m68k+sparc fat binary (see below)
 #   make -f Makefile.openstep clean
 #
 # No GNU-make features are used (no wildcard, no pattern rules) so the stock
@@ -10,7 +11,8 @@
 CC       = cc
 OPT      = -O                     # try:  make -f Makefile.openstep OPT="-O2"   (see tools/optbench.sh)
 DEFS     = -DOPENSTEP
-CFLAGS   = $(OPT) -Wall $(DEFS) -Icore -Iterm -Iapp
+ARCHS    =                        # e.g. -arch i386 -arch m68k -arch sparc; see `fat` below
+CFLAGS   = $(OPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 LIBS     = -framework AppKit -framework Foundation
 APP      = SecureShell.app
 
@@ -43,7 +45,7 @@ all: $(APP)/SecureShell
 $(APP)/SecureShell: $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONHDR) $(ICONTIFF)
 	-mkdir $(APP)
 	@( cd $(APP) ) >/dev/null 2>&1 || { echo "make: $(APP) is missing or is not a directory:"; ls -ld $(APP); echo "remove it and run make again"; exit 1; }
-	$(CC) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONFLAGS) $(LIBS) || { echo "make: linking with the __ICON segment failed; retrying without an icon"; $(CC) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(LIBS); }
+	$(CC) $(ARCHS) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONFLAGS) $(LIBS) || { echo "make: linking with the __ICON segment failed; retrying without an icon"; $(CC) $(ARCHS) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(LIBS); }
 
 # Show what was linked in: expect a segment __ICON with sections __header and app.
 iconcheck:
@@ -99,6 +101,39 @@ test: build/test_crypto build/test_vt build/test_sftp build/test_bignum build/te
 	build/test_bignum
 	build/test_ecc
 	build/test_rsa
+
+# ---- optional multi-architecture ("fat") build ----
+# NeXT's cc accepts several -arch flags in one invocation: each source is compiled once per
+# architecture and the per-arch object code is combined into one fat Mach-O file automatically,
+# and linking with the same set of -arch flags produces a fat executable -- the exact mechanism
+# Apple's own toolchain later inherited for PowerPC/Intel/Apple Silicon universal binaries. This
+# only works if the target architecture's compiler backend is actually installed as part of your
+# Developer Tools; the m68k/sparc components were separate from a plain Intel install on some
+# OPENSTEP CD sets, and this Makefile has no way to know whether yours has them.
+#
+#   make -f Makefile.openstep fat-check    # fast: does cc even accept these -arch flags here?
+#   make -f Makefile.openstep fat          # full: SecureShell.app as an i386+m68k+sparc fat binary
+#   make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different arch set
+#
+# UNVERIFIED beyond "it links and lipo reports the right slices": this codebase has so far only
+# ever run on i386 (86Box). Nothing here confirms the m68k or sparc slices actually execute --
+# LOAD32_BE/STORE32_BE etc. (ssh_types.h) mean the C core never assumes a byte order, but that is
+# a design intent, not a proof, and the AppKit/Objective-C layer is completely untested on either
+# architecture. Report back exactly what `fat`/`fat-check` print, and separately, what happens if
+# you actually get the m68k or sparc slice running on real or emulated hardware.
+FATARCHS = -arch i386 -arch m68k -arch sparc
+
+fat-check:
+	@echo "int main(void) { return 0; }" > /tmp/ssh_fatcheck.c
+	$(CC) $(FATARCHS) -c /tmp/ssh_fatcheck.c -o /tmp/ssh_fatcheck.o
+	@echo "compiled for all requested architectures; slices actually present:"
+	lipo -info /tmp/ssh_fatcheck.o
+	@rm -f /tmp/ssh_fatcheck.c /tmp/ssh_fatcheck.o
+
+fat: clean
+	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS)"
+	@echo "== fat link done; architectures actually present in $(APP)/SecureShell: =="
+	lipo -info $(APP)/SecureShell
 
 clean:
 	rm -f core/*.o term/*.o app/*.o
