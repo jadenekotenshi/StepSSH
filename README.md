@@ -48,10 +48,24 @@ renders; the New Connection panel lays out correctly; first-run entropy seeding 
 public-key logins work; key generation works; the file browser opens on a connection; `bench` timings are
 reasonable on that CPU.
 
-**Not yet reported on OPENSTEP:** function-key codes (arrows, Backspace, function keys, Tab), copy and
-paste, window resizing, individual SFTP operations (upload, download, rename, delete, `NSSavePanel`
-behaviour), and recovery from a dropped connection. Everything in `app/` beyond the list above is checked
-only by the Mac-side smoke tests.
+Also confirmed: copy and paste within the VM, and SFTP upload/download.
+
+**Known bug, reported by the author:** the arrow keys print a literal `A`/`B`/`C`/`D` instead of moving the
+cursor. `vt_encode_key()` itself is fully unit-tested and produces the right VT100 sequence, so the break is
+in `-[NSEvent characters]` not delivering the `NSUpArrowFunctionKey`-style codepoints (0xF700...) that
+`app/Compat.h` assumed -- exactly the item marked `[V]` there. There is no safe blind fix: `A`/`B`/`C`/`D`
+are also valid text, so guessing wrong would break ordinary typing instead. `app/TerminalView.m` now logs
+any *unrecognized* special key (never ordinary text) to the trace file described above; run
+
+```sh
+touch ~/.SecureShell.trace
+```
+
+then press each arrow key, Backspace, Tab, Home/End/Page Up/Down and F1-F12 once, and read the file --
+the codepoints it reports are what `app/Compat.h`'s `KEYCH_*` constants need to become.
+
+**Not yet reported on OPENSTEP:** individual SFTP operations beyond plain upload/download (rename, delete,
+new folder, `NSSavePanel` behaviour), window resizing, and recovery from a dropped connection.
 
 ## Getting it into the VM
 

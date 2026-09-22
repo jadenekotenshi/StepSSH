@@ -33,6 +33,26 @@ void PSshow(const char *s)
 
 @interface ConnectController (SmokePrivate) - (void)buildPanel; @end
 
+@interface KeyCapture : NSObject
+{
+@public
+    unsigned char bytes[64];
+    int n;
+    int calls;
+}
+@end
+@implementation KeyCapture
+- (void)terminalView:(id)tv sendBytes:(const unsigned char *)b length:(int)len
+{
+    calls++;
+    n = (len > 64) ? 64 : len;
+    memcpy(bytes, b, n);
+}
+- (void)terminalView:(id)tv resizedToCols:(int)c rows:(int)r
+{
+}
+@end
+
 static int pass, fail;
 
 static void trace_to(NSString *path, const char *fmt, ...)
@@ -41,6 +61,17 @@ static void trace_to(NSString *path, const char *fmt, ...)
     va_start(ap, fmt);
     SSTraceV(path, fmt, ap);
     va_end(ap);
+}
+
+/* A keyDown: NSEvent carrying exactly one character, no modifiers -- what TerminalView reads via
+ * -[NSEvent characters].  (+keyEventWithType:... is deprecated on modern AppKit, not on OpenStep;
+ * that is fine here, this file is never linked into the real app.) */
+static NSEvent *key_event(unichar ch)
+{
+    NSString *s = [NSString stringWithCharacters:&ch length:1];
+    return [NSEvent keyEventWithType:NSKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0
+                         windowNumber:0 context:nil characters:s charactersIgnoringModifiers:s
+                            isARepeat:NO keyCode:0];
 }
 #define EXPECT(cond, what) do { if (cond) pass++; else { fail++; printf("  FAIL: %s\n", what); } } while (0)
 
@@ -57,6 +88,7 @@ int main(int argc, char *argv[])
     AppController *app;
     ConnectController *cc;
     TerminalView *tv;
+    KeyCapture *kc;
     NSImage *img;
     vt *t;
     NSString *sel;
@@ -191,6 +223,23 @@ int main(int argc, char *argv[])
             EXPECT(y0 > y1 && y1 > 0, "rows are laid out top to bottom");
         }
         EXPECT(n_shown < 60, "drawing a mostly empty screen issues few text calls (runs, not cells)");
+
+        /* 4b. keyboard: arrow keys, and the diagnostic trace for anything unrecognized.
+         * NOT yet confirmed that OPENSTEP's real -[NSEvent characters] uses these NSUpArrowFunctionKey-
+         * style codepoints for arrow keys (see README.md); this documents & protects the current
+         * assumption, and the privacy rule that plain typed text is never written to the trace file. */
+        kc = [[KeyCapture alloc] init];
+        [tv setDelegate:kc];
+        [tv keyDown:key_event(KEYCH_UP)];
+        EXPECT(kc->calls == 1 && kc->n == 3 && memcmp(kc->bytes, "[A", 3) == 0,
+               "KEYCH_UP (0xF700) sends the VT100 cursor-up sequence");
+        kc->calls = 0;
+        [tv keyDown:key_event('A')];
+        EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 'A',
+               "a plain capital A is sent as itself, not mistaken for an arrow key");
+        /* An unrecognized special key also logs to ~/.SecureShell.trace via the same SSTrace()
+         * mechanism tested generically in 2c above (NSHomeDirectory cannot be redirected from a
+         * test, so the real destination file is not touched here). */
 
         /* 5. selection */
         [tv selectAll:nil];

@@ -1,4 +1,5 @@
 #import "TerminalView.h"
+#import "UIHelpers.h"
 #include "nsenc.h"
 #include "rng.h"
 #include <string.h>
@@ -423,6 +424,14 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
         [delegate terminalView:self sendBytes:out length:1];
         [self sendString:(base && [base length]) ? base : chars];
         return;
+    }
+
+    /* Diagnostic only: a key that reaches here unrecognized and is not ordinary printable text or
+     * a plain control key is logged (never ordinary text -- that could be something typed at a
+     * shell prompt).  Enable with:  touch ~/.SecureShell.trace  -- see README.md. */
+    if (c > 0x7e || (c < 0x20 && c != 0x09 && c != 0x0d)) {
+        SSTrace("keyDown: unrecognized key, first char U+%04X (%d chars total), modifierFlags 0x%x",
+                (unsigned)c, (int)[chars length], flags);
     }
     [self sendString:chars];
 }
