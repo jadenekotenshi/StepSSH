@@ -1,0 +1,9 @@
+# build output
+build/
+dist/
+SecureShell.app/
+*.o
+*.dSYM/
+
+# macOS
+.DS_Store

@@ -1,0 +1,546 @@
+#import "TerminalView.h"
+#include "nsenc.h"
+#include "rng.h"
+#include <string.h>
+
+#define MARGIN 3.0
+
+/* floor/ceil without <math.h>: an undeclared floor() would be assumed to return int and
+ * silently miscompute, so geometry uses these plain-C helpers instead. */
+static int ifloor(float x) { int i = (int)x; return (x < (float)i) ? i - 1 : i; }
+static int iceil(float x)  { int i = (int)x; return (x > (float)i) ? i + 1 : i; }
+#define CODE_DEFFG 256
+#define CODE_DEFBG 257
+
+@interface TerminalView (Private)
+- (NSColor *)colorForCode:(int)code;
+- (NSRect)rectForRow:(int)r;
+- (void)drawRow:(int)r cursor:(BOOL)withCursor;
+- (void)pointToCell:(NSPoint)p line:(int *)line col:(int *)col;
+- (BOOL)cellIsSelectedLine:(int)line col:(int)col;
+- (void)syncScroller;
+- (void)markDirty;
+- (void)sendString:(NSString *)s;
+@end
+
+@implementation TerminalView
+
+- (id)initWithFrame:(NSRect)frame
+{
+    NSRect bb;
+    self = [super initWithFrame:frame];
+    if (!self) return nil;
+
+    font = [[NSFont userFixedPitchFontOfSize:12.0] retain];
+    if (!font) font = [[NSFont fontWithName:@"Courier" size:12.0] retain];
+    bb = [font boundingRectForFont];
+    cellW = [font widthOfString:@"M"];
+    if (cellW < 1.0) cellW = 7.0;
+    cellH = (float)iceil(bb.size.height);
+    if (cellH < 8.0) cellH = 14.0;
+    baseline = -bb.origin.y;                      /* distance from the cell bottom to the baseline */
+    if (baseline < 0.0) baseline = 0.0;
+
+    defaultFg = [[NSColor blackColor] retain];
+    defaultBg = [[NSColor whiteColor] retain];
+
+    cols = 80; rows = 24;
+    term = vt_new(cols, rows, 2000);
+    deleteSendsBackspace = 0;
+    altSendsEscape = 1;
+    lastSb = 0;
+    [self fitToFrame];
+    return self;
+}
+
+- (void)dealloc
+{
+    int i;
+    vt_free(term);
+    [font release];
+    [defaultFg release];
+    [defaultBg release];
+    for (i = 0; i < 256; i++) [palette[i] release];
+    [super dealloc];
+}
+
+- (void)setDelegate:(id)anObject { delegate = anObject; }
+- (void)setScroller:(NSScroller *)aScroller
+{
+    scroller = aScroller;
+    [scroller setTarget:self];
+    [scroller setAction:@selector(scrollerMoved:)];
+    [self syncScroller];
+}
+- (vt *)terminal { return term; }
+- (BOOL)isOpaque { return YES; }
+- (BOOL)acceptsFirstResponder { return YES; }
+- (BOOL)acceptsFirstMouse:(NSEvent *)theEvent { return YES; }
+- (void)setUTF8:(BOOL)flag { term->utf8 = flag ? 1 : 0; }
+
+- (NSSize)contentSizeForCols:(int)c rows:(int)r
+{
+    return NSMakeSize(c * cellW + 2.0 * MARGIN, r * cellH + 2.0 * MARGIN);
+}
+
+/* ---------------------------------------------------------------- */
+/* geometry */
+
+- (NSRect)rectForRow:(int)r
+{
+    NSRect b = [self bounds];
+    return NSMakeRect(0.0, NSMaxY(b) - MARGIN - (r + 1) * cellH, b.size.width, cellH);
+}
+
+- (void)fitToFrame
+{
+    NSRect b;
+    int nc, nr;
+    if (!term) return;                            /* called from -initWithFrame: before setup */
+    b = [self bounds];
+    nc = ifloor((b.size.width - 2.0 * MARGIN) / cellW);
+    nr = ifloor((b.size.height - 2.0 * MARGIN) / cellH);
+    if (nc < 2) nc = 2;
+    if (nr < 1) nr = 1;
+    if (nc == cols && nr == rows) return;
+    cols = nc; rows = nr;
+    vt_resize(term, cols, rows);
+    if (scrollBack > vt_scrollback_count(term)) scrollBack = vt_scrollback_count(term);
+    selActive = 0;
+    [self syncScroller];
+    [self setNeedsDisplay:YES];
+    if ([delegate respondsToSelector:@selector(terminalView:resizedToCols:rows:)])
+        [delegate terminalView:self resizedToCols:cols rows:rows];
+}
+
+- (void)setFrameSize:(NSSize)newSize
+{
+    [super setFrameSize:newSize];
+    [self fitToFrame];
+}
+
+- (void)pointToCell:(NSPoint)p line:(int *)line col:(int *)col
+{
+    NSRect b = [self bounds];
+    int r = ifloor((NSMaxY(b) - MARGIN - p.y) / cellH);
+    int c = ifloor((p.x - MARGIN) / cellW);
+    if (r < 0) r = 0;
+    if (r >= rows) r = rows - 1;
+    if (c < 0) c = 0;
+    if (c >= cols) c = cols - 1;
+    *line = r - scrollBack;                /* absolute: <0 is scrollback */
+    *col = c;
+}
+
+/* ---------------------------------------------------------------- */
+/* feeding output from the SSH channel                              */
+
+- (void)markDirty
+{
+    int r;
+    if (term->all_dirty || scrollBack > 0) {
+        [self setNeedsDisplay:YES];
+    } else {
+        for (r = 0; r < rows && r < term->rows; r++)
+            if (term->dirty[r]) [self setNeedsDisplayInRect:[self rectForRow:r]];
+        if (lastCy < rows) [self setNeedsDisplayInRect:[self rectForRow:lastCy]];
+        if (term->cy < rows) [self setNeedsDisplayInRect:[self rectForRow:term->cy]];
+    }
+    lastCx = term->cx;
+    lastCy = term->cy;
+    vt_clear_dirty(term);
+}
+
+- (void)writeBytes:(const unsigned char *)bytes length:(int)n
+{
+    unsigned char reply[64];
+    int got, sb0 = vt_scrollback_count(term), sb1;
+
+    vt_write(term, bytes, (size_t)n);
+    sb1 = vt_scrollback_count(term);
+    if (sb1 != sb0) {
+        selActive = 0;                                     /* line numbers shifted under the selection */
+        if (scrollBack > 0) {                              /* keep what the user is reading in place */
+            scrollBack += sb1 - sb0;
+            if (scrollBack > sb1) scrollBack = sb1;
+        }
+    }
+    while ((got = vt_take_output(term, reply, sizeof(reply))) > 0)
+        [delegate terminalView:self sendBytes:reply length:got];
+    if (term->bell) { term->bell = 0; NSBeep(); }
+    [self syncScroller];
+    [self markDirty];
+}
+
+/* ---------------------------------------------------------------- */
+/* drawing                                                          */
+
+- (NSColor *)colorForCode:(int)code
+{
+    vt_u8 r, g, b;
+    if (code == CODE_DEFFG) return defaultFg;
+    if (code == CODE_DEFBG) return defaultBg;
+    if (!palette[code]) {
+        vt_palette_rgb(code, &r, &g, &b);
+        palette[code] = [[NSColor colorWithCalibratedRed:r / 255.0 green:g / 255.0
+                                                    blue:b / 255.0 alpha:1.0] retain];
+    }
+    return palette[code];
+}
+
+- (BOOL)cellIsSelectedLine:(int)line col:(int)col
+{
+    int l0 = selAnchorLine, c0 = selAnchorCol, l1 = selEndLine, c1 = selEndCol, t;
+    if (!selActive) return NO;
+    if (l0 > l1 || (l0 == l1 && c0 > c1)) { t = l0; l0 = l1; l1 = t; t = c0; c0 = c1; c1 = t; }
+    if (line < l0 || line > l1) return NO;
+    if (line == l0 && col < c0) return NO;
+    if (line == l1 && col > c1) return NO;
+    return YES;
+}
+
+/* Everything that determines how a cell looks, folded into one comparable key. */
+static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
+                         int *fgCode, int *bgCode)
+{
+    int fg = (c->attr & VT_DEFFG) ? CODE_DEFFG : c->fg;
+    int bg = (c->attr & VT_DEFBG) ? CODE_DEFBG : c->bg;
+    int rev = ((c->attr & VT_REVERSE) ? 1 : 0) ^ (invert ? 1 : 0) ^ (reverse_screen ? 1 : 0);
+    int t;
+    if ((c->attr & VT_BOLD) && fg < 8) fg += 8;              /* bold brightens the base colours */
+    if (rev) { t = fg; fg = bg; bg = t; }        /* codes 256/257 name the default colours themselves,
+                                                    so swapping them yields correct reverse video */
+    *fgCode = fg;
+    *bgCode = bg;
+    return (unsigned)fg | ((unsigned)bg << 9) |
+           ((unsigned)(c->attr & (VT_BOLD | VT_UNDERLINE | VT_DIM)) << 18);
+}
+
+- (void)drawRow:(int)r cursor:(BOOL)withCursor
+{
+    int w = 0, c, e, n, i, fgc, bgc, fgc2, bgc2, line = r - scrollBack;
+    const vt_cell *cells = vt_line_at(term, line, &w);
+    NSRect rr = [self rectForRow:r];
+    float x, y = rr.origin.y;
+    unsigned key, key2;
+    vt_cell blank;
+    char buf[300];
+    BOOL anyText;
+    NSColor *fg;
+
+    blank.ch = ' '; blank.fg = 0; blank.bg = 0; blank.attr = VT_DEFFG | VT_DEFBG;
+
+    for (c = 0; c < cols; ) {
+        const vt_cell *cell = (cells && c < w) ? &cells[c] : &blank;
+        int inv = [self cellIsSelectedLine:line col:c] ||
+                  (withCursor && r == term->cy && c == term->cx);
+        key = cell_key(cell, inv, term->reverse_screen, &fgc, &bgc);
+
+        for (e = c + 1; e < cols; e++) {                     /* extend the run */
+            const vt_cell *cell2 = (cells && e < w) ? &cells[e] : &blank;
+            int inv2 = [self cellIsSelectedLine:line col:e] ||
+                       (withCursor && r == term->cy && e == term->cx);
+            key2 = cell_key(cell2, inv2, term->reverse_screen, &fgc2, &bgc2);
+            if (key2 != key) break;
+        }
+        n = e - c;
+        x = MARGIN + c * cellW;
+
+        [[self colorForCode:bgc] set];
+        NSRectFill(NSMakeRect(x, y, n * cellW + (e == cols ? MARGIN : 0.0), cellH));
+
+        anyText = NO;
+        for (i = 0; i < n && i < (int)sizeof(buf) - 1; i++) {
+            const vt_cell *cl = (cells && c + i < w) ? &cells[c + i] : &blank;
+            int b = nsenc_encode(cl->ch);
+            if (b < 0) b = nsenc_encode(vt_fallback_char(cl->ch));
+            if (b < 0) b = '?';
+            if (b == 0) b = ' ';
+            buf[i] = (char)b;
+            if (b != ' ') anyText = YES;
+        }
+        buf[i] = '\0';
+        while (i > 0 && buf[i - 1] == ' ') buf[--i] = '\0';      /* don't paint trailing blanks */
+
+        fg = [self colorForCode:fgc];
+        if ((key >> 18) & VT_DIM)
+            fg = [fg blendedColorWithFraction:0.5 ofColor:[self colorForCode:bgc]];
+        if (anyText) {
+            [font set];
+            [fg set];
+            PSmoveto(x, y + baseline);
+            PSshow(buf);
+            if ((key >> 18) & VT_BOLD) {                     /* overstrike: works with any font */
+                PSmoveto(x + 1.0, y + baseline);
+                PSshow(buf);
+            }
+        }
+        if ((key >> 18) & VT_UNDERLINE) {
+            [fg set];
+            NSRectFill(NSMakeRect(x, y + baseline - 1.5, n * cellW, 1.0));
+        }
+        c = e;
+    }
+}
+
+- (void)drawRect:(NSRect)rect
+{
+    int r, first, last;
+    BOOL key = [[self window] isKeyWindow];
+    BOOL live = (scrollBack == 0 && term->cursor_visible);
+    NSRect b = [self bounds];
+
+    [defaultBg set];
+    NSRectFill(rect);
+
+    first = ifloor((NSMaxY(b) - MARGIN - NSMaxY(rect)) / cellH);
+    last  = ifloor((NSMaxY(b) - MARGIN - NSMinY(rect)) / cellH);
+    if (first < 0) first = 0;
+    if (last >= rows) last = rows - 1;
+    for (r = first; r <= last; r++) [self drawRow:r cursor:(live && key)];
+
+    if (live && !key) {                                      /* hollow cursor while inactive */
+        NSRect cr = NSMakeRect(MARGIN + term->cx * cellW, [self rectForRow:term->cy].origin.y, cellW, cellH);
+        [defaultFg set];
+        NSFrameRect(cr);
+    }
+}
+
+/* ---------------------------------------------------------------- */
+/* scrolling                                                        */
+
+- (void)syncScroller
+{
+    int sb = vt_scrollback_count(term);
+    float total = (float)(sb + rows);
+    if (!scroller) return;
+    if (sb == 0) {
+        [scroller setFloatValue:1.0 knobProportion:1.0];
+        [scroller setEnabled:NO];
+    } else {
+        [scroller setEnabled:YES];
+        [scroller setFloatValue:(float)(sb - scrollBack) / (float)sb knobProportion:(float)rows / total];
+    }
+}
+
+- (void)scrollByLines:(int)n
+{
+    int sb = vt_scrollback_count(term), old = scrollBack;
+    scrollBack += n;
+    if (scrollBack < 0) scrollBack = 0;
+    if (scrollBack > sb) scrollBack = sb;
+    if (scrollBack != old) { [self syncScroller]; [self setNeedsDisplay:YES]; }
+}
+
+- (void)scrollerMoved:(id)sender
+{
+    int sb = vt_scrollback_count(term);
+    switch ([scroller hitPart]) {
+    case NSScrollerDecrementPage:  [self scrollByLines:rows - 1]; break;
+    case NSScrollerIncrementPage:  [self scrollByLines:-(rows - 1)]; break;
+    case NSScrollerDecrementLine:  [self scrollByLines:1]; break;
+    case NSScrollerIncrementLine:  [self scrollByLines:-1]; break;
+    case NSScrollerKnob:
+    case NSScrollerKnobSlot: {
+        int want = sb - ifloor([scroller floatValue] * sb + 0.5);
+        if (want < 0) want = 0;
+        if (want > sb) want = sb;
+        if (want != scrollBack) { scrollBack = want; [self setNeedsDisplay:YES]; }
+        break;
+    }
+    default: break;
+    }
+}
+
+/* ---------------------------------------------------------------- */
+/* keyboard                                                         */
+
+- (void)sendString:(NSString *)s
+{
+    NSData *d;
+    if (!s || [s length] == 0) return;
+    d = [s dataUsingEncoding:(term->utf8 ? NSUTF8StringEncoding : NSNEXTSTEPStringEncoding)
+        allowLossyConversion:YES];
+    if ([d length]) [delegate terminalView:self sendBytes:(const unsigned char *)[d bytes] length:[d length]];
+}
+
+- (void)keyDown:(NSEvent *)theEvent
+{
+    NSString *chars = [theEvent characters];
+    unsigned flags = [theEvent modifierFlags];
+    unsigned short c;
+    int key = 0, mods = 0, n;
+    unsigned char out[32];
+
+    ssh_rng_add_timing(1);                      /* keystroke timing feeds the entropy pool */
+    if (!chars || [chars length] == 0) return;
+    c = [chars characterAtIndex:0];
+
+    if ((flags & NSShiftKeyMask) && (c == KEYCH_PGUP || c == KEYCH_PGDN)) {        /* local scrollback */
+        [self scrollByLines:(c == KEYCH_PGUP ? rows - 1 : -(rows - 1))];
+        return;
+    }
+    if (scrollBack) { scrollBack = 0; [self syncScroller]; [self setNeedsDisplay:YES]; }
+    selActive = 0;
+
+    if (flags & NSShiftKeyMask)     mods |= VT_MOD_SHIFT;
+    if (flags & NSAlternateKeyMask) mods |= VT_MOD_ALT;
+    if (flags & NSControlKeyMask)   mods |= VT_MOD_CTRL;
+
+    switch (c) {
+    case KEYCH_UP: key = VT_KEY_UP; break;
+    case KEYCH_DOWN: key = VT_KEY_DOWN; break;
+    case KEYCH_LEFT: key = VT_KEY_LEFT; break;
+    case KEYCH_RIGHT: key = VT_KEY_RIGHT; break;
+    case KEYCH_HOME: key = VT_KEY_HOME; break;
+    case KEYCH_END: key = VT_KEY_END; break;
+    case KEYCH_PGUP: key = VT_KEY_PGUP; break;
+    case KEYCH_PGDN: key = VT_KEY_PGDN; break;
+    case KEYCH_INSERT: key = VT_KEY_INSERT; break;
+    case KEYCH_DELETE: key = VT_KEY_DELETE; break;
+    case BACKTAB_CHAR: key = VT_KEY_BACKTAB; break;
+    default:
+        if (c >= KEYCH_F1 && c < KEYCH_F1 + 12) key = VT_KEY_F1 + (c - KEYCH_F1);
+        break;
+    }
+    if (key) {
+        n = vt_encode_key(term, key, mods, out);
+        if (n) [delegate terminalView:self sendBytes:out length:n];
+        return;
+    }
+
+    if (c == 0x7f || c == 0x08) {                                    /* the Delete/Backspace key */
+        out[0] = deleteSendsBackspace ? 0x08 : 0x7f;
+        [delegate terminalView:self sendBytes:out length:1];
+        return;
+    }
+    if (c == 0x03 && !(flags & NSControlKeyMask)) c = 0x0d;          /* keypad Enter */
+    if (c == 0x0d) { out[0] = 0x0d; [delegate terminalView:self sendBytes:out length:1]; return; }
+
+    if ((flags & NSAlternateKeyMask) && altSendsEscape) {
+        NSString *base = [theEvent charactersIgnoringModifiers];
+        out[0] = 0x1b;
+        [delegate terminalView:self sendBytes:out length:1];
+        [self sendString:(base && [base length]) ? base : chars];
+        return;
+    }
+    [self sendString:chars];
+}
+
+/* ---------------------------------------------------------------- */
+/* selection, copy, paste                                           */
+
+- (BOOL)isWordChar:(unsigned short)ch
+{
+    if (ch > 0x7f) return YES;
+    if ((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) return YES;
+    return ch != 0 && strchr("_-./~:@%+=#", (int)ch) != NULL;
+}
+
+- (void)mouseDown:(NSEvent *)theEvent
+{
+    NSPoint p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+    int line, col, w, e;
+    const vt_cell *cells;
+
+    [[self window] makeFirstResponder:self];
+    [self pointToCell:p line:&line col:&col];
+    selAnchorLine = selEndLine = line;
+    selAnchorCol = selEndCol = col;
+    selActive = 0;
+
+    if ([theEvent clickCount] >= 3) {                                /* whole line */
+        selAnchorCol = 0; selEndCol = cols - 1; selActive = 1;
+    } else if ([theEvent clickCount] == 2 && (cells = vt_line_at(term, line, &w)) != NULL && col < w) {
+        int s = col;
+        e = col;
+        if ([self isWordChar:cells[col].ch]) {
+            while (s > 0 && [self isWordChar:cells[s - 1].ch]) s--;
+            while (e < w - 1 && [self isWordChar:cells[e + 1].ch]) e++;
+        }
+        selAnchorCol = s; selEndCol = e; selActive = 1;
+    }
+    [self setNeedsDisplay:YES];
+}
+
+- (void)mouseDragged:(NSEvent *)theEvent
+{
+    NSPoint p = [self convertPoint:[theEvent locationInWindow] fromView:nil];
+    int line, col;
+    [self pointToCell:p line:&line col:&col];
+    if (line != selEndLine || col != selEndCol || !selActive) {
+        selEndLine = line; selEndCol = col; selActive = 1;
+        [self setNeedsDisplay:YES];
+    }
+}
+
+- (NSString *)selectedText
+{
+    int l0 = selAnchorLine, c0 = selAnchorCol, l1 = selEndLine, c1 = selEndCol, t, line, c, w, last;
+    NSMutableString *out = [NSMutableString string];
+    unichar row[512];
+    if (!selActive) return nil;
+    if (l0 > l1 || (l0 == l1 && c0 > c1)) { t = l0; l0 = l1; l1 = t; t = c0; c0 = c1; c1 = t; }
+    for (line = l0; line <= l1; line++) {
+        const vt_cell *cells = vt_line_at(term, line, &w);
+        int from = (line == l0) ? c0 : 0, to = (line == l1) ? c1 : w - 1, n = 0;
+        if (!cells) continue;
+        if (to >= w) to = w - 1;
+        last = to;
+        if (line != l1) while (last >= from && cells[last].ch == ' ') last--;   /* trim trailing blanks */
+        for (c = from; c <= last && n < 512; c++) row[n++] = cells[c].ch;
+        [out appendString:[NSString stringWithCharacters:row length:n]];
+        if (line != l1) [out appendString:@"\n"];
+    }
+    return out;
+}
+
+- (void)copy:(id)sender
+{
+    NSString *s = [self selectedText];
+    NSPasteboard *pb;
+    if (!s || [s length] == 0) return;
+    pb = [NSPasteboard generalPasteboard];
+    [pb declareTypes:[NSArray arrayWithObject:NSStringPboardType] owner:nil];
+    [pb setString:s forType:NSStringPboardType];
+}
+
+- (void)paste:(id)sender
+{
+    NSString *s = [[NSPasteboard generalPasteboard] stringForType:NSStringPboardType];
+    unsigned char esc[8];
+    if (!s || [s length] == 0) return;
+    if (scrollBack) { scrollBack = 0; [self syncScroller]; [self setNeedsDisplay:YES]; }
+    if (term->bracketed_paste) {
+        memcpy(esc, "\033[200~", 6);
+        [delegate terminalView:self sendBytes:esc length:6];
+    }
+    [self sendString:s];
+    if (term->bracketed_paste) {
+        memcpy(esc, "\033[201~", 6);
+        [delegate terminalView:self sendBytes:esc length:6];
+    }
+}
+
+- (void)selectAll:(id)sender
+{
+    selAnchorLine = -scrollBack; selAnchorCol = 0;
+    selEndLine = rows - 1 - scrollBack; selEndCol = cols - 1;
+    selActive = 1;
+    [self setNeedsDisplay:YES];
+}
+
+- (void)clearScrollback:(id)sender
+{
+    const unsigned char seq[] = "\033[3J";
+    vt_write(term, seq, 4);
+    scrollBack = 0;
+    selActive = 0;
+    [self syncScroller];
+    [self setNeedsDisplay:YES];
+}
+
+- (BOOL)becomeFirstResponder { [self setNeedsDisplay:YES]; return YES; }
+- (BOOL)resignFirstResponder { [self setNeedsDisplay:YES]; return YES; }
+
+@end
