@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "rng.h"
 
 void PSmoveto(float x, float y) { }
@@ -170,6 +171,62 @@ int main(int argc, char *argv[])
         EXPECT([[NSData dataWithContentsOfFile:back] isEqualToData:blob], "the downloaded 3 MB file is byte-for-byte identical");
 
         [b queueRename:[dir stringByAppendingPathComponent:@"up.bin"] to:[dir stringByAppendingPathComponent:@"renamed.bin"]];
+
+        /* ---- recursive transfer: upload a small local tree, then download it back ---- */
+        {
+            NSString *upTree = [work stringByAppendingPathComponent:@"walk_up"];
+            NSString *upSub = [upTree stringByAppendingPathComponent:@"sub"];
+            NSString *upEmpty = [upSub stringByAppendingPathComponent:@"empty"];
+            NSString *remoteTree = [dir stringByAppendingPathComponent:@"tree"];
+            NSString *remoteSub = [remoteTree stringByAppendingPathComponent:@"sub"];
+            NSString *downTree = [work stringByAppendingPathComponent:@"walk_down"];
+            NSData *aData = [@"file a, at the top" dataUsingEncoding:NSASCIIStringEncoding];
+            NSData *bData = [@"file b, one folder down" dataUsingEncoding:NSASCIIStringEncoding];
+
+            rmdir([upEmpty cString]); rmdir([upSub cString]); rmdir([upTree cString]);   /* a previous failed run */
+            mkdir([upTree cString], 0755); mkdir([upSub cString], 0755); mkdir([upEmpty cString], 0755);
+            [aData writeToFile:[upTree stringByAppendingPathComponent:@"a.txt"] atomically:NO];
+            [bData writeToFile:[upSub stringByAppendingPathComponent:@"b.txt"] atomically:NO];
+
+            [b queueWalkUploadOfLocal:upTree toRemote:remoteTree];
+            EXPECT(wait_idle(b, 30), "a recursive upload runs to completion");
+            EXPECT([[NSData dataWithContentsOfFile:[remoteTree stringByAppendingPathComponent:@"a.txt"]] isEqualToData:aData],
+                   "the top-level file arrived intact");
+            EXPECT([[NSData dataWithContentsOfFile:[remoteSub stringByAppendingPathComponent:@"b.txt"]] isEqualToData:bData],
+                   "the file one folder down arrived intact");
+            {
+                BOOL isDir = NO;
+                EXPECT([[NSFileManager defaultManager] fileExistsAtPath:[remoteSub stringByAppendingPathComponent:@"empty"]
+                                                              isDirectory:&isDir] && isDir,
+                       "an empty subdirectory was created too, not just the ones holding files");
+            }
+
+            [b queueWalkDownloadOfRemote:remoteTree toLocal:downTree];
+            EXPECT(wait_idle(b, 30), "a recursive download runs to completion");
+            EXPECT([[NSData dataWithContentsOfFile:[downTree stringByAppendingPathComponent:@"a.txt"]] isEqualToData:aData],
+                   "downloaded: the top-level file matches");
+            EXPECT([[NSData dataWithContentsOfFile:[[downTree stringByAppendingPathComponent:@"sub"]
+                                                      stringByAppendingPathComponent:@"b.txt"]] isEqualToData:bData],
+                   "downloaded: the file one folder down matches");
+            {
+                BOOL isDir = NO;
+                EXPECT([[NSFileManager defaultManager] fileExistsAtPath:[[downTree stringByAppendingPathComponent:@"sub"]
+                                                                    stringByAppendingPathComponent:@"empty"]
+                                                              isDirectory:&isDir] && isDir,
+                       "downloaded: the empty subdirectory came back too");
+            }
+
+            [b queueRemove:[remoteTree stringByAppendingPathComponent:@"a.txt"] directory:NO];
+            [b queueRemove:[remoteSub stringByAppendingPathComponent:@"b.txt"] directory:NO];
+            [b queueRemove:[remoteSub stringByAppendingPathComponent:@"empty"] directory:YES];
+            [b queueRemove:remoteSub directory:YES];
+            [b queueRemove:remoteTree directory:YES];
+            EXPECT(wait_idle(b, 10), "the uploaded tree can be torn back down file by file");
+
+            [[NSFileManager defaultManager] removeFileAtPath:upTree handler:nil];
+            [[NSFileManager defaultManager] removeFileAtPath:downTree handler:nil];
+        }
+
         wait_idle(b, 10);
         EXPECT(has_entry(b, @"renamed.bin", NO, 3000000, YES) && !has_entry(b, @"up.bin", NO, 0, NO), "rename is reflected in the listing");
         [b queueRemove:[dir stringByAppendingPathComponent:@"renamed.bin"] directory:NO];

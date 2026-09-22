@@ -35,6 +35,9 @@
     FILE             *xfile;
     NSString         *xlocal;                    /* partial local file to remove on failure */
     BOOL              xisDownload;
+    NSString         *walkRemote, *walkLocal;     /* remote/local dir of the "walkdir"/"walkupload" job in flight */
+    BOOL              walkCancelled;              /* Cancel was hit while a walk step's request was in flight:
+                                                     * its reply must not queue that directory's children */
 }
 - (id)initWithSession:(SSHSession *)s host:(NSString *)h user:(NSString *)u;
 - (void)show;
@@ -62,6 +65,11 @@
 - (void)goTo:(NSString *)path;
 - (void)queueUploadOfLocal:(NSString *)local toRemote:(NSString *)remote;
 - (void)queueDownloadOfRemote:(NSString *)remote toLocal:(NSString *)local size:(unsigned long long)size;
+/* Recursive: local/remote must not exist as a plain file. Walks the source tree one directory
+ * at a time as each step completes, queueing a "get"/"put" per file and a nested walk per
+ * subdirectory just ahead of whatever else is queued, so one folder finishes before its sibling. */
+- (void)queueWalkDownloadOfRemote:(NSString *)remote toLocal:(NSString *)local;
+- (void)queueWalkUploadOfLocal:(NSString *)local toRemote:(NSString *)remote;
 - (void)queueMkdir:(NSString *)remote;
 - (void)queueRemove:(NSString *)remote directory:(BOOL)isDir;
 - (void)queueRename:(NSString *)from to:(NSString *)to;

@@ -8,6 +8,8 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <dirent.h>
+#include <errno.h>
 
 /* ------------------------------------------------------------------ */
 /* a plain progress bar                                                */
@@ -71,6 +73,8 @@
 - (NSString *)remoteJoin:(NSString *)name;
 - (sftp *)core;
 - (void)kick;
+- (void)walkListFinished:(sftp_dirlist *)d;
+- (void)walkMkdirDone;
 @end
 
 /* ---- C callbacks: sftp.c calls these from inside sftp_input() ---- */
@@ -92,6 +96,12 @@ static void cb_step(sftp *s, const sftp_response *r, void *ctx)
 
 static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChanged:x]; }
 
+/* Recursive transfer: a directory listing (download side) or a mkdir reply (upload side) for a
+ * "walkdir"/"walkupload" job in progress.  Distinct from cb_list/cb_step, which drive the browser's
+ * own visible listing and the plain single-step jobs -- these must not touch either. */
+static void cb_walklist(sftp_dirlist *d, void *ctx) { [(SFTPBrowser *)ctx walkListFinished:d]; }
+static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBrowser *)ctx walkMkdirDone]; }
+
 @implementation SFTPBrowser
 
 - (id)initWithSession:(SSHSession *)s host:(NSString *)h user:(NSString *)u
@@ -112,6 +122,7 @@ static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChang
     [window setDelegate:nil];
     [host release]; [user release]; [window release]; [entries release]; [jobs release];
     [cwd release]; [wanted release]; [xlocal release];
+    [walkRemote release]; [walkLocal release];
     [super dealloc];
 }
 
@@ -404,6 +415,8 @@ static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChang
 - (void)queueUploadOfLocal:(NSString *)local toRemote:(NSString *)remote { [self queueJob:@"put" a:local b:remote size:0]; }
 - (void)queueDownloadOfRemote:(NSString *)remote toLocal:(NSString *)local size:(unsigned long long)size
 { [self queueJob:@"get" a:remote b:local size:size]; }
+- (void)queueWalkDownloadOfRemote:(NSString *)remote toLocal:(NSString *)local { [self queueJob:@"walkdir" a:remote b:local size:0]; }
+- (void)queueWalkUploadOfLocal:(NSString *)local toRemote:(NSString *)remote { [self queueJob:@"walkupload" a:local b:remote size:0]; }
 - (void)queueMkdir:(NSString *)remote { [self queueJob:@"mkdir" a:remote b:nil size:0]; }
 - (void)queueRemove:(NSString *)remote directory:(BOOL)isDir { [self queueJob:(isDir ? @"rmdir" : @"rm") a:remote b:nil size:0]; }
 - (void)queueRename:(NSString *)from to:(NSString *)to { [self queueJob:@"mv" a:from b:to size:0]; }
@@ -436,12 +449,38 @@ static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChang
             [xlocal release]; xlocal = nil; xisDownload = NO;
             busy = YES; fraction = 0;
             [self setStatus:[NSString stringWithFormat:@"Uploading %@ ...", [a lastPathComponent]]];
+        } else if ([op isEqual:@"walkdir"]) {
+            /* The parent directory is guaranteed to exist already: a "walkdir" job for a
+             * subdirectory is only ever queued after its parent's own walkdir step has both run
+             * (creating the parent locally) and listed the remote side, so a plain, non-recursive
+             * mkdir is always enough here -- never "mkdir -p", which OPENSTEP does not have. */
+            BOOL isDir = NO;
+            if (![[NSFileManager defaultManager] fileExistsAtPath:b isDirectory:&isDir] || !isDir) {
+                if (mkdir([b cString], 0755) != 0 && errno != EEXIST) {
+                    [self failJobs:[NSString stringWithFormat:@"Cannot create %@", b]];
+                    return;
+                }
+            }
+            [walkRemote release]; walkRemote = [a retain];
+            [walkLocal release]; walkLocal = [b retain];
+            if (!sftp_list(core, UI_CPATH(a), cb_walklist, self)) { [self failJobs:@"Cannot list the directory."]; return; }
+            busy = YES;
+            [self setStatus:[NSString stringWithFormat:@"Reading %@ ...", a]];
         } else {
             u32 rid = 0;
             if ([op isEqual:@"mkdir"]) rid = sftp_mkdir(core, UI_CPATH(a), 0755, cb_step, self);
             else if ([op isEqual:@"rmdir"]) rid = sftp_rmdir(core, UI_CPATH(a), cb_step, self);
             else if ([op isEqual:@"rm"]) rid = sftp_remove(core, UI_CPATH(a), cb_step, self);
             else if ([op isEqual:@"mv"]) rid = sftp_rename(core, UI_CPATH(a), UI_CPATH(b), cb_step, self);
+            else if ([op isEqual:@"walkupload"]) {
+                /* Same reasoning as "walkdir", mirrored: the remote parent directory is already
+                 * there, so one plain, non-recursive mkdir suffices.  Its result is not checked --
+                 * SFTP v3 has no distinct "already exists" status, and any real problem (e.g.
+                 * permission denied) surfaces on the first file uploaded into it regardless. */
+                [walkRemote release]; walkRemote = [b retain];
+                [walkLocal release]; walkLocal = [a retain];
+                rid = sftp_mkdir(core, UI_CPATH(b), 0755, cb_walkmkdir, self);
+            }
             if (!rid) { [self failJobs:@"Cannot send the request."]; return; }
             busy = YES;
         }
@@ -515,6 +554,104 @@ static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChang
 {
     [jobs removeAllObjects];
     if (xfer) sftp_xfer_cancel((sftp_xfer *)xfer);
+    if (busy && !xfer) walkCancelled = YES;     /* a walkdir/walkupload step's reply is still in flight */
+}
+
+/* ---------------------------------------------------------------- */
+/* recursive transfers: called back once the request for a "walkdir" or "walkupload" step         */
+/* (queued in runNextJob) replies -- everything this directory contains is queued right behind     */
+/* whatever else is queued, so this subtree finishes before its next sibling.                      */
+
+- (void)walkListFinished:(sftp_dirlist *)d
+{
+    NSString *remoteBase = [walkRemote retain], *localBase = [walkLocal retain];
+    int i, n, insertAt = 0;
+    busy = NO;
+    if (walkCancelled) {
+        walkCancelled = NO;
+        sftp_dirlist_free(d);
+        [remoteBase release]; [localBase release];
+        [self setControlsEnabled];
+        [self runNextJob];
+        return;
+    }
+    if (!sftp_dirlist_ok(d)) {
+        NSString *msg = [NSString stringWithFormat:@"%@: %@", remoteBase, ui_string_from_utf8(sftp_dirlist_error(d))];
+        sftp_dirlist_free(d);
+        [remoteBase release]; [localBase release];
+        [self failJobs:msg];
+        return;
+    }
+    n = sftp_dirlist_count(d);
+    for (i = 0; i < n; i++) {
+        const sftp_name *nm = sftp_dirlist_entry(d, i);
+        NSString *name = ui_string_from_utf8(nm->name);
+        NSString *rp, *lp;
+        NSMutableDictionary *j;
+        if ([name isEqual:@"."] || [name isEqual:@".."]) continue;
+        rp = [remoteBase stringByAppendingPathComponent:name];
+        lp = [localBase stringByAppendingPathComponent:name];
+        j = [NSMutableDictionary dictionary];
+        if (SFTP_S_ISDIR(nm->attrs.perms)) {
+            [j setObject:@"walkdir" forKey:@"op"]; [j setObject:rp forKey:@"a"]; [j setObject:lp forKey:@"b"];
+        } else if (!SFTP_S_ISLNK(nm->attrs.perms)) {                 /* symlinks are not followed */
+            unsigned long long size = (nm->attrs.flags & SFTP_ATTR_SIZE) ? nm->attrs.size : 0;
+            [j setObject:@"get" forKey:@"op"]; [j setObject:rp forKey:@"a"]; [j setObject:lp forKey:@"b"];
+            [j setObject:[NSNumber numberWithUnsignedLong:(unsigned long)size] forKey:@"size"];
+        } else {
+            continue;
+        }
+        [jobs insertObject:j atIndex:insertAt++];
+    }
+    sftp_dirlist_free(d);
+    [remoteBase release]; [localBase release];
+    [self setControlsEnabled];
+    [self runNextJob];
+}
+
+- (void)walkMkdirDone
+{
+    NSString *localBase = [walkLocal retain], *remoteBase = [walkRemote retain];
+    DIR *dp;
+    struct dirent *de;
+    int insertAt = 0;
+    busy = NO;
+    if (walkCancelled) {
+        walkCancelled = NO;
+        [localBase release]; [remoteBase release];
+        [self setControlsEnabled];
+        [self runNextJob];
+        return;
+    }
+    dp = opendir([localBase cString]);
+    if (!dp) {
+        [localBase release]; [remoteBase release];
+        [self failJobs:[NSString stringWithFormat:@"Cannot read %@", localBase]];
+        return;
+    }
+    while ((de = readdir(dp)) != NULL) {
+        NSString *name, *lp, *rp;
+        struct stat st;
+        NSMutableDictionary *j;
+        if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
+        name = ui_string_from_utf8(de->d_name);
+        lp = [localBase stringByAppendingPathComponent:name];
+        rp = [remoteBase stringByAppendingPathComponent:name];
+        if (stat([lp cString], &st) != 0) continue;                   /* vanished, or unreadable: skip it */
+        j = [NSMutableDictionary dictionary];
+        if (S_ISDIR(st.st_mode)) {
+            [j setObject:@"walkupload" forKey:@"op"]; [j setObject:lp forKey:@"a"]; [j setObject:rp forKey:@"b"];
+        } else if (S_ISREG(st.st_mode)) {
+            [j setObject:@"put" forKey:@"op"]; [j setObject:lp forKey:@"a"]; [j setObject:rp forKey:@"b"];
+        } else {
+            continue;                                                 /* devices, fifos, etc.: not uploaded */
+        }
+        [jobs insertObject:j atIndex:insertAt++];
+    }
+    closedir(dp);
+    [localBase release]; [remoteBase release];
+    [self setControlsEnabled];
+    [self runNextJob];
 }
 
 /* ---------------------------------------------------------------- */
@@ -523,29 +660,38 @@ static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChang
 - (void)download:(id)sender
 {
     NSArray *sel = [self selectedEntries];
-    NSMutableArray *files = [NSMutableArray array];
-    NSSavePanel *panel = [NSSavePanel savePanel];
+    NSSavePanel *panel;
     NSString *dir, *target;
     int i;
+    BOOL anyDirs = NO;
 
-    for (i = 0; i < (int)[sel count]; i++) if (!((SFTPEntry *)[sel objectAtIndex:i])->isDir) [files addObject:[sel objectAtIndex:i]];
-    if ([files count] == 0) {
-        NSRunAlertPanel(@"Download", @"Select one or more files first. Downloading whole folders is not supported yet.", @"OK", nil, nil);
-        return;
-    }
-    if ([files count] == 1) {
-        SFTPEntry *e = [files objectAtIndex:0];
+    if ([sel count] == 0) { NSRunAlertPanel(@"Download", @"Select one or more items first.", @"OK", nil, nil); return; }
+    for (i = 0; i < (int)[sel count]; i++) if (((SFTPEntry *)[sel objectAtIndex:i])->isDir) anyDirs = YES;
+
+    if ([sel count] == 1 && !anyDirs) {                     /* one plain file: pick its exact destination name */
+        SFTPEntry *e = [sel objectAtIndex:0];
+        panel = [NSSavePanel savePanel];
         [panel setTitle:@"Download"];
         if ([panel runModalForDirectory:NSHomeDirectory() file:e->name] != NSOKButton) return;
         [self queueDownloadOfRemote:[self remoteJoin:e->name] toLocal:[panel filename] size:e->size];
         return;
     }
+
+    /* several items, or at least one folder: pick a destination folder (the NSSavePanel-on-a-
+     * placeholder-name trick, same as before -- runModalForDirectory:file: is what is confirmed
+     * working on OPENSTEP; NSOpenPanel's own -setCanChooseDirectories: is used for uploads below,
+     * since only a folder can be chosen there and it is unconfirmed there too). */
+    panel = [NSSavePanel savePanel];
     [panel setTitle:@"Choose the destination folder, then click Save"];
     if ([panel runModalForDirectory:NSHomeDirectory() file:@"(folder)"] != NSOKButton) return;
     dir = [[panel filename] stringByDeletingLastPathComponent];
-    for (i = 0; i < (int)[files count]; i++) {
-        SFTPEntry *e = [files objectAtIndex:i];
+    for (i = 0; i < (int)[sel count]; i++) {
+        SFTPEntry *e = [sel objectAtIndex:i];
         target = [dir stringByAppendingPathComponent:e->name];
+        if (e->isDir) {
+            [self queueWalkDownloadOfRemote:[self remoteJoin:e->name] toLocal:target];
+            continue;
+        }
         if ([[NSFileManager defaultManager] fileExistsAtPath:target] &&
             NSRunAlertPanel(@"Replace file?", @"%@ already exists.", @"Replace", @"Skip", nil, target) != NSAlertDefaultReturn)
             continue;
@@ -559,17 +705,24 @@ static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChang
     NSArray *names;
     int i, j;
     [panel setAllowsMultipleSelection:YES];
+    [panel setCanChooseDirectories:YES];        /* part of the OpenStep spec's NSOpenPanel, not a later addition */
     [panel setTitle:@"Upload"];
     if ([panel runModalForDirectory:NSHomeDirectory() file:nil types:nil] != NSOKButton) return;
     names = [panel filenames];
     for (i = 0; i < (int)[names count]; i++) {
         NSString *local = [names objectAtIndex:i], *leaf = [local lastPathComponent];
-        BOOL exists = NO;
+        struct stat st;
+        BOOL exists = NO, isDir;
         for (j = 0; j < (int)[entries count]; j++)
             if ([((SFTPEntry *)[entries objectAtIndex:j])->name isEqual:leaf]) exists = YES;
-        if (exists && NSRunAlertPanel(@"Replace file?", @"%@ already exists on the server.", @"Replace", @"Skip", nil, leaf) != NSAlertDefaultReturn)
+        isDir = (stat([local cString], &st) == 0 && S_ISDIR(st.st_mode));
+        if (exists && NSRunAlertPanel(@"Replace?",
+                isDir ? @"A folder named %@ already exists on the server. Its contents will be merged."
+                      : @"%@ already exists on the server.",
+                @"Replace", @"Skip", nil, leaf) != NSAlertDefaultReturn)
             continue;
-        [self queueUploadOfLocal:local toRemote:[self remoteJoin:leaf]];
+        if (isDir) [self queueWalkUploadOfLocal:local toRemote:[self remoteJoin:leaf]];
+        else [self queueUploadOfLocal:local toRemote:[self remoteJoin:leaf]];
     }
 }
 

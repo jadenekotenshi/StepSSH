@@ -13,14 +13,14 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Host keys | ssh-ed25519, ecdsa-sha2-nistp256/384/521, RSA (rsa-sha2-512, rsa-sha2-256, and legacy SHA-1 ssh-rsa) |
 | Ciphers / MACs | chacha20-poly1305, aes256/128-ctr; hmac-sha2-256/512 (+etm); **legacy, chosen only if nothing better is offered:** aes256/128-cbc, hmac-sha1 (+etm) |
 | Login | password, keyboard-interactive, public key: **ed25519, RSA, ECDSA**, plain or passphrase-protected; OpenSSH format and traditional PEM (PKCS#1, SEC1, PKCS#8) |
-| Files | SFTP browser on a second channel of the same connection: list, upload, download (pipelined), new folder, rename, delete |
+| Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), new folder, rename, delete |
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
 | Safety | known_hosts checking (plain, wildcard, hashed), strict-KEX (Terrapin) mitigation, refuses to run on a weak RNG |
 
 **Not supported:** compression, port forwarding, agent forwarding, X11, IPv6, mouse reporting,
-recursive folder transfers, drag-and-drop, RSA/ECDSA key *generation* (ed25519 only), 3DES,
-1024-bit diffie-hellman-group1-sha1, DSA keys, encrypted PKCS#8 keys (convert with
-`ssh-keygen -p -m PEM -f KEY`).
+drag-and-drop, recursive folder *deletion* (only individual files and empty folders), RSA/ECDSA key
+*generation* (ed25519 only), 3DES, 1024-bit diffie-hellman-group1-sha1, DSA keys, encrypted PKCS#8
+keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
 ## What was verified, and what was not
 
@@ -64,8 +64,9 @@ touch ~/.SecureShell.trace
 then press each arrow key, Backspace, Tab, Home/End/Page Up/Down and F1-F12 once, and read the file --
 the codepoints it reports are what `app/Compat.h`'s `KEYCH_*` constants need to become.
 
-**Not yet reported on OPENSTEP:** individual SFTP operations beyond plain upload/download (rename, delete,
-new folder, `NSSavePanel` behaviour), window resizing, and recovery from a dropped connection.
+**Not yet reported on OPENSTEP:** rename, delete, new folder, `NSSavePanel`/`NSOpenPanel` behaviour,
+recursive folder upload/download (new; only tested against a real server on the Mac so far -- see
+`make session-smoke`), window resizing, and recovery from a dropped connection.
 
 ## Getting it into the VM
 
@@ -128,6 +129,13 @@ cat ~/.SecureShell.trace                 # argv, working directory, and each sta
 - `-[NSWindow setResizeIncrements:]` (guarded with `respondsToSelector:`).
 - `NSScroller` part constants; `NSTableView -clickedRow` and `-selectedRowEnumerator`.
 - `gethostbyname()` blocks the UI while resolving (use an IP address if slow).
+- `-[NSOpenPanel setCanChooseDirectories:]` (used so *Upload* can pick a folder to upload
+  recursively): part of the OpenStep specification and present in GNUstep's from-scratch
+  reimplementation of it, so it should be there, but is not yet confirmed on OPENSTEP 4.2 itself.
+- **`opendir`/`readdir`/`closedir`** (walking a local folder for a recursive upload): new to this
+  codebase. If OPENSTEP's headers are missing prototypes for these (as they were for several other
+  POSIX calls -- see `core/oscompat.h`), the warnings look the same as those did; report them and
+  they get added there.
 
 ## Speed on an old CPU
 
