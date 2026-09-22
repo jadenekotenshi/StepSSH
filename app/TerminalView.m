@@ -601,6 +601,18 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
 }
 - (void)rightMouseUp:(NSEvent *)theEvent { [self mouseUp:theEvent]; }
 
+#ifdef OPENSTEP
+/* [V] -[NSEvent deltaX]/deltaY: confirmed absent from OPENSTEP 4.2's real AppKit (not just an
+ * undeclared-but-present method, like the DIR/NSDragOperation build breaks were -- GNUstep's own
+ * from-scratch reimplementation of the OpenStep API gates exactly this pair of accessors behind
+ * "Mac OS X only", while the NSScrollWheel event type itself is not gated). There is no confirmed
+ * way to read a wheel event's amount or direction on this platform, so this does nothing rather
+ * than guess at one; the local scrollbar, Shift-PageUp/PageDown, and click/drag mouse reporting all
+ * still work. See README.md's Mouse reporting section. */
+- (void)scrollWheel:(NSEvent *)theEvent
+{
+}
+#else
 - (void)scrollWheel:(NSEvent *)theEvent
 {
     float dy = [theEvent deltaY];
@@ -616,6 +628,7 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
     [self scrollByLines:(dy > 0.0 ? 3 : -3)];      /* a fixed step per wheel event: robust to whatever
                                                      * granularity this hardware's NSEvent deltaY uses */
 }
+#endif
 
 - (NSString *)selectedText
 {

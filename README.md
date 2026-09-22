@@ -8,7 +8,7 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 
 | Feature | Detail |
 |---|---|
-| Terminal | VT100/xterm subset, 256 colours, scrollback, alternate screen (vi, less, tmux), copy/paste, function keys, mouse reporting (click, drag, wheel -- for vim, tmux and the like) |
+| Terminal | VT100/xterm subset, 256 colours, scrollback, alternate screen (vi, less, tmux), copy/paste, function keys, mouse reporting (click and drag -- for vim, tmux and the like; not the wheel, see Mouse reporting below) |
 | Key exchange | curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group-exchange-sha256, group16-sha512, group14-sha256, group14-sha1 (last resort) |
 | Host keys | ssh-ed25519, ecdsa-sha2-nistp256/384/521, RSA (rsa-sha2-512, rsa-sha2-256, and legacy SHA-1 ssh-rsa) |
 | Ciphers / MACs | chacha20-poly1305, aes256/128-ctr; hmac-sha2-256/512 (+etm); **legacy, chosen only if nothing better is offered:** aes256/128-cbc, hmac-sha1 (+etm) |
@@ -216,10 +216,9 @@ would mean implementing a small SOCKS4/5 server. Both are plausible future addit
 ## Mouse reporting
 
 When the remote program asks for it (vim, tmux, htop, mc, and most full-screen terminal apps that use
-the mouse), clicks, drags and the scroll wheel are sent to it instead of doing local text selection or
-scrolling -- e.g. clicking to move vim's cursor or resize a tmux pane, or scrolling a pane's history.
-Hold **Shift** to bypass this and get ordinary local selection/scrolling regardless, the same override
-real xterm uses.
+the mouse), clicks and drags are sent to it instead of doing local text selection -- e.g. clicking to
+move vim's cursor or resize a tmux pane. Hold **Shift** to bypass this and get ordinary local selection
+regardless, the same override real xterm uses.
 
 Supported: X10 (click only), normal (click and release), button-event and any-event tracking (also
 drag motion, respectively only while a button is held or always), SGR extended coordinates (what
@@ -229,6 +228,16 @@ and friends were not confirmed as available on OPENSTEP 4.2's AppKit, unlike `ri
 has been part of NSResponder since NeXTSTEP). Highlight tracking (mode 1001) is deliberately not
 implemented: it requires a cooperating program on the host, and xterm's own documentation warns that
 getting it wrong can hang a real xterm.
+
+**The scroll wheel is not reported, and does not scroll locally either, on OPENSTEP itself** (it works
+on the development Mac, where this was first written and tested). `-[NSEvent deltaX]`/`deltaY` --
+needed to read a wheel event's amount and direction at all -- turned out to be a genuine Mac OS X
+addition, confirmed absent from OPENSTEP 4.2's real AppKit: not a mere undeclared-but-present method
+like the `DIR`/`NSDragOperation` build breaks were, but explicitly gated "Mac OS X only" in GNUstep's
+own from-scratch reimplementation of the OpenStep API, while the `NSScrollWheel` event type itself is
+not gated. There is no confirmed way to read a wheel event's amount or direction on this platform, so
+`-[TerminalView scrollWheel:]` does nothing there rather than guess at one. The scrollbar,
+Shift-PageUp/PageDown, and click/drag mouse reporting are unaffected.
 
 The wire encoding (`term/vt.c`'s `vt_encode_mouse`) was checked bit-for-bit against real xterm's own
 source (`button.c`'s `BtnCode`/`EditorButton`), not just its written documentation -- one detail (which
