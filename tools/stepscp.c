@@ -68,6 +68,16 @@ static int join_path(char out[2048], const char *dir, const char *name)
     return 0;
 }
 
+/* Not S_ISDIR(): a real link error on the user's hardware ("can't find the symbol _S_ISDIR")
+ * means it's neither a working macro nor a linkable function in this header configuration.
+ * S_IFMT/S_IFDIR themselves are plain manifest constants (far older and more fundamental than the
+ * S_ISDIR() convenience macro built from them), so this bypasses the question of whether S_ISDIR
+ * itself exists here at all. */
+static int is_dir_mode(int mode)
+{
+    return (mode & S_IFMT) == S_IFDIR;
+}
+
 static void push(const char *local, const char *remote, int kind)
 {
     if (n_items == cap_items) { cap_items = cap_items ? cap_items * 2 : 64; items = (item *)realloc(items, (size_t)cap_items * sizeof(item)); }
@@ -90,7 +100,7 @@ static void upload_dir(const item *it)
         if (!strcmp(de->d_name, ".") || !strcmp(de->d_name, "..")) continue;
         if (join_path(lp, it->local, de->d_name) < 0 || join_path(rp, it->remote, de->d_name) < 0) continue;
         if (stat(lp, &st) != 0) continue;
-        push(lp, rp, S_ISDIR(st.st_mode) ? ITEM_DIR : ITEM_FILE);
+        push(lp, rp, is_dir_mode((int)st.st_mode) ? ITEM_DIR : ITEM_FILE);
     }
     closedir(d);
     advance();
@@ -270,7 +280,7 @@ int main(int argc, char **argv)
     push(lpath, rpath, recursive ? ITEM_DIR : ITEM_FILE);
     if (!recursive) {
         struct stat st;
-        if (uploading && stat(lpath, &st) == 0 && S_ISDIR(st.st_mode)) {
+        if (uploading && stat(lpath, &st) == 0 && is_dir_mode((int)st.st_mode)) {
             fprintf(stderr, "stepscp: %s is a directory; use -r\n", lpath);
             return 2;
         }
