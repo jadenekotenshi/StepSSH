@@ -25,10 +25,11 @@
 #include <errno.h>
 #include <sys/types.h>
 #include <sys/socket.h>
-#include <sys/select.h>
+#include <sys/time.h>
 #include <netdb.h>
 #include "../core/ssh.h"
 #include "../core/rng.h"
+#include "../core/oscompat.h"
 #include "clicommon.h"
 
 static int verbose, quiet;

@@ -25,11 +25,12 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/socket.h>
-#include <sys/select.h>
+#include <sys/time.h>
 #include <netdb.h>
 #include "../core/ssh.h"
 #include "../core/sftp.h"
 #include "../core/rng.h"
+#include "../core/oscompat.h"
 #include "clicommon.h"
 
 enum { ITEM_FILE, ITEM_DIR };
