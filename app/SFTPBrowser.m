@@ -60,19 +60,6 @@ typedef struct dirent ss_dirent;
 }
 @end
 
-/* ------------------------------------------------------------------ */
-
-@implementation SFTPEntry
-- (void)dealloc { [name release]; [super dealloc]; }
-- (NSComparisonResult)compareToEntry:(SFTPEntry *)other
-{
-    if (isDir != other->isDir) return isDir ? NSOrderedAscending : NSOrderedDescending;
-    return [name caseInsensitiveCompare:other->name];
-}
-@end
-
-/* ------------------------------------------------------------------ */
-
 @interface SFTPBrowser (Private)
 - (void)buildWindow;
 - (void)setStatus:(NSString *)s;
@@ -92,7 +79,62 @@ typedef struct dirent ss_dirent;
 - (void)kick;
 - (void)walkListFinished:(sftp_dirlist *)d;
 - (void)walkMkdirDone;
+- (void)queueUploadsOfPaths:(NSArray *)paths;
+- (void)droppedFiles:(NSArray *)paths;
 @end
+
+/* ------------------------------------------------------------------ */
+/* the file listing table: also a drag destination, for dropping files or folders from Workspace's  */
+/* File Viewer to upload them.  registerForDraggedTypes: and the NSDraggingDestination methods below */
+/* are original OpenStep API (present since NeXTSTEP); NSTableView's own drag-source and data-source  */
+/* hooks (for dragging rows out, or reordering them) are unrelated and untouched. Drag-OUT to         */
+/* download is not implemented: it would need "promised" files (Mac OS X 10.2+; see droppedFiles:).   */
+
+@interface SFTPTableView : NSTableView
+{
+    id owner;                    /* not retained, mirrors TerminalView's delegate: the SFTPBrowser */
+}
+- (void)setOwner:(id)anObject;
+@end
+
+@implementation SFTPTableView
+- (id)initWithFrame:(NSRect)frame
+{
+    self = [super initWithFrame:frame];
+    if (self) [self registerForDraggedTypes:[NSArray arrayWithObject:NSFilenamesPboardType]];
+    return self;
+}
+- (void)setOwner:(id)anObject { owner = anObject; }
+
+- (NSDragOperation)draggingEntered:(id <NSDraggingInfo>)sender
+{
+    NSPasteboard *pb = [sender draggingPasteboard];
+    if (![pb availableTypeFromArray:[NSArray arrayWithObject:NSFilenamesPboardType]]) return NSDragOperationNone;
+    if (owner && ![owner isReady]) return NSDragOperationNone;      /* not connected: nothing to drop onto */
+    return NSDragOperationCopy;
+}
+- (NSDragOperation)draggingUpdated:(id <NSDraggingInfo>)sender { return [self draggingEntered:sender]; }
+- (BOOL)prepareForDragOperation:(id <NSDraggingInfo>)sender { return YES; }
+- (BOOL)performDragOperation:(id <NSDraggingInfo>)sender
+{
+    NSArray *paths = [[sender draggingPasteboard] propertyListForType:NSFilenamesPboardType];
+    if (![paths count]) return NO;
+    if (owner) [owner droppedFiles:paths];
+    return YES;
+}
+- (void)concludeDragOperation:(id <NSDraggingInfo>)sender { }
+@end
+
+@implementation SFTPEntry
+- (void)dealloc { [name release]; [super dealloc]; }
+- (NSComparisonResult)compareToEntry:(SFTPEntry *)other
+{
+    if (isDir != other->isDir) return isDir ? NSOrderedAscending : NSOrderedDescending;
+    return [name caseInsensitiveCompare:other->name];
+}
+@end
+
+/* ------------------------------------------------------------------ */
 
 /* ---- C callbacks: sftp.c calls these from inside sftp_input() ---- */
 
@@ -194,7 +236,8 @@ static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBro
     [pathField setAutoresizingMask:(NSViewWidthSizable | NSViewMinYMargin)];
     [c addSubview:upBtn]; [c addSubview:refreshBtn]; [c addSubview:pathField];
 
-    table = [[[NSTableView alloc] initWithFrame:NSMakeRect(0, 0, 640, 300)] autorelease];
+    table = [[[SFTPTableView alloc] initWithFrame:NSMakeRect(0, 0, 640, 300)] autorelease];
+    [(SFTPTableView *)table setOwner:self];
     for (i = 0; i < 4; i++) {
         col = [[[NSTableColumn alloc] initWithIdentifier:colIdent[i]] autorelease];
         [[col headerCell] setStringValue:colTitle[i]];
@@ -716,18 +759,11 @@ static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBro
     }
 }
 
-- (void)upload:(id)sender
+- (void)queueUploadsOfPaths:(NSArray *)paths
 {
-    NSOpenPanel *panel = [NSOpenPanel openPanel];
-    NSArray *names;
     int i, j;
-    [panel setAllowsMultipleSelection:YES];
-    [panel setCanChooseDirectories:YES];        /* part of the OpenStep spec's NSOpenPanel, not a later addition */
-    [panel setTitle:@"Upload"];
-    if ([panel runModalForDirectory:NSHomeDirectory() file:nil types:nil] != NSOKButton) return;
-    names = [panel filenames];
-    for (i = 0; i < (int)[names count]; i++) {
-        NSString *local = [names objectAtIndex:i], *leaf = [local lastPathComponent];
+    for (i = 0; i < (int)[paths count]; i++) {
+        NSString *local = [paths objectAtIndex:i], *leaf = [local lastPathComponent];
         struct stat st;
         BOOL exists = NO, isDir;
         for (j = 0; j < (int)[entries count]; j++)
@@ -741,6 +777,27 @@ static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBro
         if (isDir) [self queueWalkUploadOfLocal:local toRemote:[self remoteJoin:leaf]];
         else [self queueUploadOfLocal:local toRemote:[self remoteJoin:leaf]];
     }
+}
+
+- (void)upload:(id)sender
+{
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    [panel setAllowsMultipleSelection:YES];
+    [panel setCanChooseDirectories:YES];        /* part of the OpenStep spec's NSOpenPanel, not a later addition */
+    [panel setTitle:@"Upload"];
+    if ([panel runModalForDirectory:NSHomeDirectory() file:nil types:nil] != NSOKButton) return;
+    [self queueUploadsOfPaths:[panel filenames]];
+}
+
+/* Dropping files or folders from Workspace's File Viewer onto the table -- see SFTPTableView below.
+ * Only the upload direction: dragging OUT to download would need OPENSTEP's AppKit to support
+ * "promised" files (declare a drag now, supply the actual bytes lazily once Workspace asks where to
+ * put them), which is a Mac OS X 10.2+ addition (NSFilesPromisePboardType,
+ * -namesOfPromisedFilesDroppedAtDestination:) not present in OPENSTEP 4.2's AppKit. */
+- (void)droppedFiles:(NSArray *)paths
+{
+    if (!ready || dead || ![paths count]) return;
+    [self queueUploadsOfPaths:paths];
 }
 
 - (void)newFolder:(id)sender

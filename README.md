@@ -13,12 +13,13 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Host keys | ssh-ed25519, ecdsa-sha2-nistp256/384/521, RSA (rsa-sha2-512, rsa-sha2-256, and legacy SHA-1 ssh-rsa) |
 | Ciphers / MACs | chacha20-poly1305, aes256/128-ctr; hmac-sha2-256/512 (+etm); **legacy, chosen only if nothing better is offered:** aes256/128-cbc, hmac-sha1 (+etm) |
 | Login | password, keyboard-interactive, public key: **ed25519, RSA, ECDSA**, plain or passphrase-protected; OpenSSH format and traditional PEM (PKCS#1, SEC1, PKCS#8) |
-| Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), new folder, rename, delete |
+| Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), drag files/folders from Workspace's File Viewer onto the browser to upload, new folder, rename, delete |
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
 | Safety | known_hosts checking (plain, wildcard, hashed), strict-KEX (Terrapin) mitigation, refuses to run on a weak RNG |
 
-**Not supported:** compression, port forwarding, agent forwarding, X11, IPv6, mouse reporting,
-drag-and-drop, recursive folder *deletion* (only individual files and empty folders), RSA/ECDSA key
+**Not supported:** compression, port forwarding, agent forwarding, X11, IPv6, mouse reporting, dragging
+files *out* of the SFTP browser to download (see Drag-and-drop below), recursive folder *deletion* (only
+individual files and empty folders), RSA/ECDSA key
 *generation* (ed25519 only), 3DES, 1024-bit diffie-hellman-group1-sha1, DSA keys, encrypted PKCS#8
 keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
@@ -189,6 +190,24 @@ make -f Makefile.openstep OPT="-O2 -fomit-frame-pointer"    # then build with th
 
 Set `OPT`, not `CFLAGS`: overriding `CFLAGS` would drop `-DOPENSTEP` and the include paths.
 Only the C core is sensitive to this; the Objective-C app is limited by the display and network.
+
+## Drag-and-drop
+
+Drag files or folders from Workspace's File Viewer onto the SFTP browser's file listing to upload them
+into whatever directory it currently shows -- folders go through the same recursive upload as the
+Upload panel. This uses `registerForDraggedTypes:` and the `NSDraggingDestination` informal protocol
+on the table view, which are original OpenStep API present since NeXTSTEP; the drop is rejected (the
+"no" cursor) while the browser isn't connected.
+
+Dragging files *out* of the browser to download them is not implemented, and can't be done the way a
+modern Cocoa app would: that relies on "promised" files (declare the drag immediately, supply the actual
+bytes lazily once Workspace says where to put them -- `NSFilesPromisePboardType`,
+`-namesOfPromisedFilesDroppedAtDestination:`), which is a Mac OS X 10.2 addition, confirmed absent from
+OPENSTEP 4.2's AppKit (checked against GNUstep's headers, which gate it behind a Mac-OS-X-only version
+check). The only OpenStep-era alternative -- the `NSPasteboardOwner` protocol's
+`-pasteboard:provideDataForType:` -- supplies data synchronously when asked, which would mean blocking
+the drag (and the whole app) until an SFTP download over the network finished; not worth doing for a
+worse experience than the existing Download button and panel.
 
 ## Layout
 

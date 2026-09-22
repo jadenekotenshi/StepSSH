@@ -232,6 +232,36 @@ int main(int argc, char *argv[])
         [b queueRemove:[dir stringByAppendingPathComponent:@"renamed.bin"] directory:NO];
         [b queueRemove:[dir stringByAppendingPathComponent:@"zdir"] directory:YES];
         EXPECT(wait_idle(b, 10) && [b entryCount] == 0, "delete (file and folder) empties the directory");
+
+        /* ---- dropping files/folders from Workspace: droppedFiles: is what a real drop's
+         * -performDragOperation: calls; the NSDraggingInfo/pasteboard side of an actual drag cannot
+         * be simulated here, so this exercises everything downstream of reading the dropped paths. */
+        {
+            NSString *dropFile = [work stringByAppendingPathComponent:@"dropped.txt"];
+            NSString *dropDir = [work stringByAppendingPathComponent:@"dropped_dir"];
+            NSData *fileData = [@"dropped via droppedFiles:" dataUsingEncoding:NSASCIIStringEncoding];
+            NSData *innerData = [@"inside the dropped folder" dataUsingEncoding:NSASCIIStringEncoding];
+
+            [fileData writeToFile:dropFile atomically:NO];
+            mkdir([dropDir cString], 0755);
+            [innerData writeToFile:[dropDir stringByAppendingPathComponent:@"inner.txt"] atomically:NO];
+
+            [b droppedFiles:[NSArray arrayWithObjects:dropFile, dropDir, nil]];
+            EXPECT(wait_idle(b, 20), "a drop (one file, one folder) runs to completion");
+            EXPECT([[NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:@"dropped.txt"]] isEqualToData:fileData],
+                   "the dropped file arrived intact");
+            EXPECT([[NSData dataWithContentsOfFile:[[dir stringByAppendingPathComponent:@"dropped_dir"]
+                                                      stringByAppendingPathComponent:@"inner.txt"]] isEqualToData:innerData],
+                   "the dropped folder was uploaded recursively");
+
+            [b queueRemove:[dir stringByAppendingPathComponent:@"dropped.txt"] directory:NO];
+            [b queueRemove:[[dir stringByAppendingPathComponent:@"dropped_dir"] stringByAppendingPathComponent:@"inner.txt"] directory:NO];
+            [b queueRemove:[dir stringByAppendingPathComponent:@"dropped_dir"] directory:YES];
+            wait_idle(b, 10);
+            [[NSFileManager defaultManager] removeFileAtPath:dropFile handler:nil];
+            [[NSFileManager defaultManager] removeFileAtPath:dropDir handler:nil];
+        }
+
         [b queueRemove:dir directory:YES];
         wait_idle(b, 10);
 
