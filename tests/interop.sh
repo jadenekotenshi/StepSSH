@@ -150,13 +150,20 @@ if /usr/sbin/sshd -f "$KEXCFG" -E "$T/sshd_kex.log"; then
     echo "$out" | grep -q "^kex-ok" && echo "$out" | grep -q "kex=$k " && ok "key exchange $k" || bad "key exchange $k" "$(echo "$out" | tail -2)"
   done
   echo "== legacy ciphers and MACs (only chosen when the server offers nothing better)"
-  for c in aes128-cbc aes256-cbc; do
+  for c in aes128-cbc aes192-cbc aes256-cbc 3des-cbc; do
     for m in hmac-sha1 hmac-sha1-etm@openssh.com hmac-sha2-256 hmac-sha2-256-etm@openssh.com; do
       out=$(KSSHC -c $c -m $m -v -e 'echo legacy-ok' 2>&1)
       echo "$out" | grep -q "^legacy-ok" && echo "$out" | grep -q "cipher=$c mac=$m " && ok "$c / $m" || bad "$c / $m" "$(echo "$out" | tail -2)"
     done
   done
-  for c in aes256-ctr aes128-ctr; do
+  echo "== hmac-md5 and the truncated -96 MACs (a wrong key length here interoperates with nothing:"
+  echo "   the -96 variants truncate only the tag, not the key both sides derive and use for it)"
+  for m in hmac-md5 hmac-md5-etm@openssh.com hmac-md5-96 hmac-md5-96-etm@openssh.com \
+           hmac-sha1-96 hmac-sha1-96-etm@openssh.com; do
+    out=$(KSSHC -c aes128-ctr -m $m -v -e 'echo mac-ok' 2>&1)
+    echo "$out" | grep -q "^mac-ok" && echo "$out" | grep -q "mac=$m " && ok "aes128-ctr / $m" || bad "aes128-ctr / $m" "$(echo "$out" | tail -2)"
+  done
+  for c in aes256-ctr aes192-ctr aes128-ctr; do
     out=$(KSSHC -c $c -m hmac-sha1 -v -e 'echo legacy-ok' 2>&1)
     echo "$out" | grep -q "^legacy-ok" && echo "$out" | grep -q "cipher=$c mac=hmac-sha1 " && ok "$c / hmac-sha1" || bad "$c / hmac-sha1" "$(echo "$out" | tail -2)"
   done

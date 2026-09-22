@@ -1,3 +1,4 @@
+#include <string.h>
 #include "blowfish.h"
 #include "blowfish_tab.h"
 
@@ -84,4 +85,48 @@ void blf_key(blf_ctx *c, const u8 *key, size_t klen)
 {
     blf_initstate(c);
     blf_expand0state(c, key, klen);
+}
+
+/* The exact inverse of blf_encipher: the same 16-round Feistel network, with the eighteen P-array
+ * subkeys applied in reverse order (P[17] first, P[0] last) instead of forward. */
+void blf_decipher(const blf_ctx *c, u32 *xl, u32 *xr)
+{
+    u32 l = *xl, r = *xr;
+    int i;
+    l ^= c->P[17];
+    for (i = 16; i >= 1; i -= 2) {
+        r ^= (BLF_F(c, l) & 0xffffffffUL) ^ c->P[i];
+        l ^= (BLF_F(c, r) & 0xffffffffUL) ^ c->P[i - 1];
+    }
+    *xl = r ^ c->P[0];
+    *xr = l;
+}
+
+void blowfish_cbc_encrypt_chain(const blf_ctx *c, u8 iv[8], const u8 *in, u8 *out, size_t len)
+{
+    size_t off;
+    u32 l, r;
+    for (off = 0; off + 8 <= len; off += 8) {
+        l = LOAD32_BE(in + off)     ^ LOAD32_BE(iv);
+        r = LOAD32_BE(in + off + 4) ^ LOAD32_BE(iv + 4);
+        blf_encipher(c, &l, &r);
+        STORE32_BE(out + off, l);
+        STORE32_BE(out + off + 4, r);
+        memcpy(iv, out + off, 8);
+    }
+}
+
+void blowfish_cbc_decrypt_chain(const blf_ctx *c, u8 iv[8], const u8 *in, u8 *out, size_t len)
+{
+    size_t off;
+    u32 l, r;
+    u8 cur[8];
+    for (off = 0; off + 8 <= len; off += 8) {
+        memcpy(cur, in + off, 8);
+        l = LOAD32_BE(cur); r = LOAD32_BE(cur + 4);
+        blf_decipher(c, &l, &r);
+        STORE32_BE(out + off, l ^ LOAD32_BE(iv));
+        STORE32_BE(out + off + 4, r ^ LOAD32_BE(iv + 4));
+        memcpy(iv, cur, 8);
+    }
 }

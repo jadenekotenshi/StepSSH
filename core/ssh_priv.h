@@ -5,6 +5,8 @@
 #include "ssh.h"
 #include "wire.h"
 #include "aes.h"
+#include "blowfish.h"
+#include "des.h"
 #include "chacha.h"
 #include "bignum.h"
 #include "hmac.h"
@@ -51,17 +53,26 @@
 #define M_CHAN_SUCCESS     99
 #define M_CHAN_FAILURE     100
 
-enum { CIPHER_NONE = 0, CIPHER_CHACHAPOLY, CIPHER_AES256CTR, CIPHER_AES128CTR, CIPHER_AES256CBC, CIPHER_AES128CBC };
+enum { CIPHER_NONE = 0, CIPHER_CHACHAPOLY, CIPHER_AES256CTR, CIPHER_AES128CTR, CIPHER_AES256CBC, CIPHER_AES128CBC,
+       CIPHER_AES192CTR, CIPHER_AES192CBC, CIPHER_BLOWFISHCBC, CIPHER_3DESCBC };
 
 /* One direction of the encrypted transport. */
 typedef struct {
     int  cipher;
-    int  mackind;     /* HMAC_SHA256 / HMAC_SHA512 / HMAC_SHA1 */
-    int  cbc;         /* AES-CBC (IV chained across packets) rather than CTR */
-    u8   cbcv[16];    /* the running CBC IV */
+    int  block;       /* this cipher's block size in bytes (8 or 16): packet length/padding must align
+                        * to it (RFC 4253 s.6). Unused (0) for CIPHER_NONE/CIPHER_CHACHAPOLY, which have
+                        * their own fixed alignment rules, hardcoded where they are used. */
+    int  mackind;     /* HMAC_SHA256 / HMAC_SHA512 / HMAC_SHA1 / HMAC_MD5 */
+    int  cbc;         /* a block cipher chained in CBC mode (IV carried across packets) rather than CTR */
+    u8   cbcv[16];    /* the running CBC IV: the first `block` bytes are used */
     int  etm;         /* encrypt-then-MAC */
-    int  maclen;      /* 0 for AEAD / none */
+    int  maclen;      /* the MAC tag appended to each packet: 0 for AEAD / none, else MACS[].len --
+                        * may be shorter than mackeylen (the "-96" truncated variants) */
+    int  mackeylen;   /* the HMAC key length: always the underlying hash's natural size (MACS[].keylen),
+                        * regardless of how much of the tag itself gets used */
     aes_ctr_ctx     aes;
+    blf_ctx         bf;         /* CIPHER_BLOWFISHCBC only */
+    des3_ctx        des3;       /* CIPHER_3DESCBC only */
     chachapoly_ctx  cp;
     u8   mackey[64];
 } ssh_dir;

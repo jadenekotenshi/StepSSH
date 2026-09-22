@@ -11,7 +11,7 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Terminal | VT100/xterm subset, 256 colours, scrollback, alternate screen (vi, less, tmux), copy/paste, function keys, mouse reporting (click and drag -- for vim, tmux and the like; not the wheel, see Mouse reporting below) |
 | Key exchange | curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group-exchange-sha256, group16-sha512, group14-sha256, group14-sha1 (last resort) |
 | Host keys | ssh-ed25519, ecdsa-sha2-nistp256/384/521, RSA (rsa-sha2-512, rsa-sha2-256, and legacy SHA-1 ssh-rsa) |
-| Ciphers / MACs | chacha20-poly1305, aes256/128-ctr; hmac-sha2-256/512 (+etm); **legacy, chosen only if nothing better is offered:** aes256/128-cbc, hmac-sha1 (+etm) |
+| Ciphers / MACs | chacha20-poly1305, aes256/192/128-ctr; hmac-sha2-256/512 (+etm), hmac-sha1 (+etm); **legacy, chosen only if nothing better is offered:** aes256/192/128-cbc, blowfish-cbc, 3des-cbc, hmac-sha1-96, hmac-md5, hmac-md5-96 (+etm variants) |
 | Login | password, keyboard-interactive, public key: **ed25519, RSA, ECDSA**, plain or passphrase-protected; OpenSSH format and traditional PEM (PKCS#1, SEC1, PKCS#8) |
 | Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), drag files/folders from Workspace's File Viewer onto the browser to upload, new folder, rename, delete |
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
@@ -23,20 +23,20 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 covers left/right and the wheel only -- see Mouse reporting below), dragging files *out* of the SFTP
 browser to download (see Drag-and-drop below), recursive folder *deletion* (only individual files and
 empty folders), RSA/ECDSA key
-*generation* (ed25519 only), 3DES, 1024-bit diffie-hellman-group1-sha1, DSA keys, encrypted PKCS#8
+*generation* (ed25519 only), 1024-bit diffie-hellman-group1-sha1, DSA keys, encrypted PKCS#8
 keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
 ## What was verified, and what was not
 
 **Verified on the development Mac** (all also clean under AddressSanitizer + UBSan):
 
-- `make test` &mdash; 1518 checks: crypto against independent references (Python, `openssl`, RFC
+- `make test` &mdash; 1573 checks: crypto against independent references (Python, `openssl`, RFC/FIPS
   vectors), big-integer arithmetic against Python's own integers, elliptic curves against OpenSSL
   signatures and ECDH secrets, RSA signatures **byte-identical** to OpenSSL's, every key type and file
   format that `ssh-keygen` produces, the SFTP engine against an in-memory fake server (short reads,
   fragmented delivery, injected failures, cancellation, connection loss, hostile input), and the
   terminal emulator including a fuzz test.
-- `make interop` &mdash; 93 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
+- `make interop` &mdash; 108 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
   exchange method; RSA/ECDSA/ed25519 login keys and host keys; encrypted keys; keys written by the
   app's own generator (read back by the real `ssh-keygen`); 3 MB and 20 MB transfers in both
   directions through **dozens of re-keys** (including Diffie-Hellman and CBC re-keys mid-transfer);
@@ -286,7 +286,7 @@ worse experience than the existing Download button and panel.
 
 ```
 core/   SSH engine. Pure C89, no I/O: feed it bytes, drain its output and events.
-  sha1 sha2 md5 hmac aes chacha nacl blowfish bcrypt   primitives
+  sha1 sha2 md5 hmac aes chacha nacl blowfish des bcrypt   primitives
   bignum ecc rsa                                       big integers, NIST curves, RSA PKCS#1
   rng                                                  entropy pool (see below)
   wire                                                 buffers, SSH wire format, base64
@@ -324,9 +324,20 @@ The engines are *sans-I/O* on purpose: the same code is driven by a blocking `se
   attacks). That is acceptable for a single-user client on an isolated retro machine; it would not be
   for a shared server. ChaCha20-Poly1305 and ed25519 are constant-time in their design.
 - **ECDSA nonces** are hedged: derived from fresh randomness *and* the private key *and* the message.
-- **Legacy algorithms** (CBC, hmac-sha1, SHA-1 signatures, group14-sha1) are offered last, so a server
-  that supports anything better never negotiates them; the negotiation is integrity-protected by the
-  exchange hash, so a network attacker cannot force a downgrade.
+- **Legacy algorithms** (CBC, blowfish-cbc, 3des-cbc, hmac-sha1, hmac-md5 and their truncated "-96"
+  variants, SHA-1 signatures, group14-sha1) are offered last, so a server that supports anything
+  better never negotiates them; the negotiation is integrity-protected by the exchange hash, so a
+  network attacker cannot force a downgrade. They exist for interop with other software on old
+  systems, not because they are recommended.
+- **DES's tables are hand-transcribed, unlike every other fixed table in this codebase.**
+  `tools/gen_tables.py` derives everything else from first principles (the AES S-box from GF(2^8)
+  inversion, Blowfish's P/S-arrays from the digits of pi) specifically so nothing has to be typed
+  from a published table. DES has no such derivation -- its permutations and S-boxes are arbitrary
+  constants fixed by FIPS 46-3, the same for every DES implementation ever written. `core/des.c`
+  documents how the transcription was checked: a standalone Python implementation verified against
+  the FIPS 46-3 worked example, the DES weak-key fixed points, and `openssl enc -des-ede3-cbc`
+  independently, with the C tables generated verbatim from that same verified data rather than
+  retyped a second time.
 - Generated keys are written mode 0600 and an existing key file is never overwritten.
 
 ## Regenerating tables, vectors and fixtures (development Mac only)

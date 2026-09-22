@@ -11,6 +11,7 @@
 #include "../core/knownhosts.h"
 #include "../core/wire.h"
 #include "../core/blowfish.h"
+#include "../core/des.h"
 #include "../core/bcrypt.h"
 #include "../core/ssh_key.h"
 #include <stdio.h>
@@ -69,6 +70,10 @@ static void test_hmac(void)
         hmac_update(&h, m + hmac_mlens[i] / 2, hmac_mlens[i] - hmac_mlens[i] / 2);
         hmac_final(&h, out);
         CHECK_MEM(out, hmac512_exp[i], 64, "hmac-sha512");
+        hmac_init(&h, HMAC_MD5, k, hmac_klens[i]);
+        hmac_update(&h, m, hmac_mlens[i]);
+        hmac_final(&h, out);
+        CHECK_MEM(out, hmac_md5_exp[i], 16, "hmac-md5");
     }
 }
 
@@ -261,18 +266,96 @@ static void test_blowfish(void)
     blf_encipher(&c, &l, &r);
     unhex("4ef997456198dd78", want, 8);
     CHECK(l == LOAD32_BE(want) && r == LOAD32_BE(want + 4));
+    blf_decipher(&c, &l, &r);
+    CHECK(l == 0 && r == 0);
     memset(key, 0xff, 8);
     blf_key(&c, key, 8);
     l = r = 0xffffffffUL;
     blf_encipher(&c, &l, &r);
     unhex("51866fd5b85ecb8a", want, 8);
     CHECK(l == LOAD32_BE(want) && r == LOAD32_BE(want + 4));
+    blf_decipher(&c, &l, &r);
+    CHECK(l == 0xffffffffUL && r == 0xffffffffUL);
     unhex("0123456789abcdef", key, 8); unhex("1111111111111111", pt, 8);
     blf_key(&c, key, 8);
     l = LOAD32_BE(pt); r = LOAD32_BE(pt + 4);
     blf_encipher(&c, &l, &r);
     unhex("61f9c3802281b096", want, 8);
     CHECK(l == LOAD32_BE(want) && r == LOAD32_BE(want + 4));
+    blf_decipher(&c, &l, &r);
+    CHECK(l == LOAD32_BE(pt) && r == LOAD32_BE(pt + 4));
+
+    /* CBC chaining, against OpenSSL's independent bf-cbc (see tools/gen_vectors.py) */
+    {
+        u8 iv[8], buf[bf_plain_LEN];
+        blf_key(&c, bf_key, bf_key_LEN);
+        memcpy(iv, bf_iv, 8);
+        blowfish_cbc_encrypt_chain(&c, iv, bf_plain, buf, bf_plain_LEN);
+        CHECK_MEM(buf, bf_cbc_exp, bf_plain_LEN, "blowfish-cbc encrypt");
+        memcpy(iv, bf_iv, 8);
+        blowfish_cbc_decrypt_chain(&c, iv, bf_cbc_exp, buf, bf_plain_LEN);
+        CHECK_MEM(buf, bf_plain, bf_plain_LEN, "blowfish-cbc decrypt");
+        /* a chain split across several calls (as the SSH transport, one packet at a time) must give
+         * the same result as one call over the whole thing */
+        memcpy(iv, bf_iv, 8);
+        blowfish_cbc_encrypt_chain(&c, iv, bf_plain, buf, 16);
+        blowfish_cbc_encrypt_chain(&c, iv, bf_plain + 16, buf + 16, 24);
+        CHECK_MEM(buf, bf_cbc_exp, bf_plain_LEN, "blowfish-cbc encrypt, split across calls");
+    }
+}
+
+static void test_des(void)
+{
+    /* The one worked example FIPS 46-3 itself gives -- see the block comment at the top of
+     * core/des.c for why this cipher's tables can't be verified any other way than against
+     * known answers like this one. */
+    {
+        des_ctx c;
+        u8 key[8], pt[8], ct[8], want[8], back[8];
+        unhex("133457799bbcdff1", key, 8);
+        unhex("0123456789abcdef", pt, 8);
+        unhex("85e813540f0ab405", want, 8);
+        des_key(&c, key);
+        des_crypt_block(&c, pt, ct, 0);
+        CHECK_MEM(ct, want, 8, "des encrypt (FIPS 46-3)");
+        des_crypt_block(&c, ct, back, 1);
+        CHECK_MEM(back, pt, 8, "des decrypt (FIPS 46-3)");
+    }
+    /* DES weak keys: encrypting twice with one is the identity function. */
+    {
+        static const char *weak[] = {
+            "0101010101010101", "fefefefefefefefe", "1f1f1f1f0e0e0e0e", "e0e0e0e0f1f1f1f1"
+        };
+        int i;
+        for (i = 0; i < 4; i++) {
+            des_ctx c;
+            u8 key[8], x[8], once[8], twice[8];
+            unhex(weak[i], key, 8);
+            unhex("123456789abcdef0", x, 8);
+            des_key(&c, key);
+            des_crypt_block(&c, x, once, 0);
+            des_crypt_block(&c, once, twice, 0);
+            CHECK_MEM(twice, x, 8, "des weak key fixed point");
+        }
+    }
+    /* 3des-cbc, against OpenSSL's independent des-ede3-cbc (see tools/gen_vectors.py) */
+    {
+        des3_ctx c;
+        u8 iv[8], buf[des3_plain_LEN];
+        des3_key(&c, des3_key_bytes);
+        memcpy(iv, des3_iv, 8);
+        des3_cbc_encrypt_chain(&c, iv, des3_plain, buf, des3_plain_LEN);
+        CHECK_MEM(buf, des3_cbc_exp, des3_plain_LEN, "3des-cbc encrypt");
+        memcpy(iv, des3_iv, 8);
+        des3_cbc_decrypt_chain(&c, iv, des3_cbc_exp, buf, des3_plain_LEN);
+        CHECK_MEM(buf, des3_plain, des3_plain_LEN, "3des-cbc decrypt");
+        /* a chain split across several calls (as the SSH transport, one packet at a time) must give
+         * the same result as one call over the whole thing */
+        memcpy(iv, des3_iv, 8);
+        des3_cbc_encrypt_chain(&c, iv, des3_plain, buf, 16);
+        des3_cbc_encrypt_chain(&c, iv, des3_plain + 16, buf + 16, des3_plain_LEN - 16);
+        CHECK_MEM(buf, des3_cbc_exp, des3_plain_LEN, "3des-cbc encrypt, split across calls");
+    }
 }
 
 static int read_file(const char *path, char *buf, size_t cap)
@@ -661,7 +744,7 @@ static void test_rng(void)
 int main(void)
 {
     test_sha(); test_hmac(); test_sha1(); test_knownhosts(); test_aes(); test_aes_blocks(); test_cbc_chain();
-    test_blowfish(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
+    test_blowfish(); test_des(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
  test_chacha();
     test_x25519(); test_ed25519(); test_rng();
     test_keygen();                       /* after test_rng: that test needs an unseeded pool */

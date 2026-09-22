@@ -42,10 +42,13 @@ static const char DEF_KEX[] =
 static const char DEF_HOSTKEY[] =
     "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256,ssh-rsa";
 static const char DEF_CIPHERS[] =
-    "chacha20-poly1305@openssh.com,aes256-ctr,aes128-ctr,aes256-cbc,aes128-cbc";
+    "chacha20-poly1305@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr,"
+    "aes256-cbc,aes192-cbc,aes128-cbc,blowfish-cbc,3des-cbc";
 static const char DEF_MACS[] =
     "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,"
-    "hmac-sha2-256,hmac-sha2-512,hmac-sha1";
+    "hmac-sha2-256,hmac-sha2-512,hmac-sha1,"
+    "hmac-sha1-96-etm@openssh.com,hmac-md5-etm@openssh.com,hmac-md5-96-etm@openssh.com,"
+    "hmac-sha1-96,hmac-md5,hmac-md5-96";
 /* Group-exchange bounds (RFC 8270 requires at least 2048 bits; 4096 keeps a slow CPU usable). */
 #define GEX_MIN  2048
 #define GEX_BITS 3072
@@ -55,19 +58,34 @@ static const char DEF_MACS[] =
 static const struct { const char *name; int id; int keylen, ivlen; } CIPHERS[] = {
     { "chacha20-poly1305@openssh.com", CIPHER_CHACHAPOLY, 64, 0  },
     { "aes256-ctr",                    CIPHER_AES256CTR,  32, 16 },
+    { "aes192-ctr",                    CIPHER_AES192CTR,  24, 16 },
     { "aes128-ctr",                    CIPHER_AES128CTR,  16, 16 },
     { "aes256-cbc",                    CIPHER_AES256CBC,  32, 16 },    /* legacy: last resort */
-    { "aes128-cbc",                    CIPHER_AES128CBC,  16, 16 },
+    { "aes192-cbc",                    CIPHER_AES192CBC,  24, 16 },    /* legacy: last resort */
+    { "aes128-cbc",                    CIPHER_AES128CBC,  16, 16 },    /* legacy: last resort */
+    { "blowfish-cbc",                  CIPHER_BLOWFISHCBC, 16, 8  },   /* legacy: last resort */
+    { "3des-cbc",                      CIPHER_3DESCBC,     24, 8  },   /* legacy: last resort */
 };
 #define N_CIPHERS ((int)(sizeof(CIPHERS) / sizeof(CIPHERS[0])))
 
-static const struct { const char *name; int kind, etm, len; } MACS[] = {
-    { "hmac-sha2-256-etm@openssh.com", HMAC_SHA256, 1, 32 },
-    { "hmac-sha2-512-etm@openssh.com", HMAC_SHA512, 1, 64 },
-    { "hmac-sha1-etm@openssh.com",     HMAC_SHA1,   1, 20 },    /* legacy */
-    { "hmac-sha2-256",                 HMAC_SHA256, 0, 32 },
-    { "hmac-sha2-512",                 HMAC_SHA512, 0, 64 },
-    { "hmac-sha1",                     HMAC_SHA1,   0, 20 },    /* legacy */
+/* len is the MAC tag appended to each packet; keylen is the HMAC key length, always the underlying
+ * hash's natural output size even where len is shorter (the "-96" variants: RFC 4253's hmac-sha1-96
+ * and hmac-md5-96 truncate only the tag, not the key derived for it -- getting this wrong is exactly
+ * the kind of thing that would silently interoperate with nothing, since both ends must derive and
+ * use the identical, untruncated key before either one agrees to only compare 96 bits of the result). */
+static const struct { const char *name; int kind, etm, len, keylen; } MACS[] = {
+    { "hmac-sha2-256-etm@openssh.com", HMAC_SHA256, 1, 32, 32 },
+    { "hmac-sha2-512-etm@openssh.com", HMAC_SHA512, 1, 64, 64 },
+    { "hmac-sha1-etm@openssh.com",     HMAC_SHA1,   1, 20, 20 },    /* legacy */
+    { "hmac-sha1-96-etm@openssh.com",  HMAC_SHA1,   1, 12, 20 },    /* legacy */
+    { "hmac-md5-etm@openssh.com",      HMAC_MD5,    1, 16, 16 },    /* legacy */
+    { "hmac-md5-96-etm@openssh.com",   HMAC_MD5,    1, 12, 16 },    /* legacy */
+    { "hmac-sha2-256",                 HMAC_SHA256, 0, 32, 32 },
+    { "hmac-sha2-512",                 HMAC_SHA512, 0, 64, 64 },
+    { "hmac-sha1",                     HMAC_SHA1,   0, 20, 20 },    /* legacy */
+    { "hmac-sha1-96",                  HMAC_SHA1,   0, 12, 20 },    /* legacy */
+    { "hmac-md5",                      HMAC_MD5,    0, 16, 16 },    /* legacy */
+    { "hmac-md5-96",                   HMAC_MD5,    0, 12, 16 },    /* legacy */
 };
 #define N_MACS ((int)(sizeof(MACS) / sizeof(MACS[0])))
 
@@ -258,36 +276,44 @@ const u8 *ssh_output(ssh_session *s, size_t *len)
 /* packet layer                                                        */
 /* ------------------------------------------------------------------ */
 
-/* Block-cipher encrypt/decrypt in place: AES-CTR keeps a running keystream, AES-CBC chains
- * its IV across packets (RFC 4253 section 6.3). */
+/* Block-cipher encrypt/decrypt in place: AES-CTR keeps a running keystream, AES-CBC,
+ * Blowfish-CBC and 3DES-CBC chain their IV across packets (RFC 4253 section 6.3). */
 static void blk_enc(ssh_dir *d, u8 *p, size_t n)
 {
-    if (d->cbc) aes_cbc_encrypt_chain(&d->aes, d->cbcv, p, p, n);
+    if (d->cipher == CIPHER_BLOWFISHCBC) blowfish_cbc_encrypt_chain(&d->bf, d->cbcv, p, p, n);
+    else if (d->cipher == CIPHER_3DESCBC) des3_cbc_encrypt_chain(&d->des3, d->cbcv, p, p, n);
+    else if (d->cbc) aes_cbc_encrypt_chain(&d->aes, d->cbcv, p, p, n);
     else aes_ctr_xor(&d->aes, p, p, n);
 }
 
 static void blk_dec(ssh_dir *d, u8 *p, size_t n)
 {
-    if (d->cbc) aes_cbc_decrypt_chain(&d->aes, d->cbcv, p, p, n);
+    if (d->cipher == CIPHER_BLOWFISHCBC) blowfish_cbc_decrypt_chain(&d->bf, d->cbcv, p, p, n);
+    else if (d->cipher == CIPHER_3DESCBC) des3_cbc_decrypt_chain(&d->des3, d->cbcv, p, p, n);
+    else if (d->cbc) aes_cbc_decrypt_chain(&d->aes, d->cbcv, p, p, n);
     else aes_ctr_xor(&d->aes, p, p, n);
 }
 
 static void mac_calc(const ssh_dir *d, u32 seq, const u8 *data, size_t n, u8 *out)
 {
     hmac_ctx h;
-    u8 sb[4];
+    u8 sb[4], full[64];      /* the full, untruncated digest: HMAC always uses the full key and produces
+                               * the full tag internally, even for a "-96" MAC that only appends 12 bytes
+                               * of it to the packet -- writing straight into `out` would overrun it for
+                               * those, since callers size that space from d->maclen, not the real digest */
     STORE32_BE(sb, seq);
-    hmac_init(&h, d->mackind, d->mackey, (size_t)d->maclen);
+    hmac_init(&h, d->mackind, d->mackey, (size_t)d->mackeylen);
     hmac_update(&h, sb, 4);
     hmac_update(&h, data, n);
-    hmac_final(&h, out);
+    hmac_final(&h, full);
+    memcpy(out, full, (size_t)d->maclen);
 }
 
 static int send_packet_now(ssh_session *s, const u8 *payload, size_t plen)
 {
     ssh_dir *d = &s->tx;
     int aead = d->cipher == CIPHER_CHACHAPOLY;
-    size_t block = (d->cipher == CIPHER_NONE || aead) ? 8 : 16;
+    size_t block = (d->cipher == CIPHER_NONE || aead) ? 8 : (size_t)d->block;
     int excl = aead || d->etm;              /* length field not covered by alignment */
     size_t body = 1 + plen, pad, pktlen, total;
     u8 *pkt;
@@ -414,7 +440,15 @@ static int read_packet(ssh_session *s, const u8 **payload, size_t *plen)
         u8 mac[64];
         if (avail < 4) return 0;
         pktlen = LOAD32_BE(p);
-        if (pktlen < 16 || pktlen > SSH_MAX_PACKET || (pktlen % 16)) { ssh_fail(s, "bad packet length"); return -1; }
+        /* Unlike the non-etm framing below, etm's 4-byte length field is cleartext and outside the
+         * cipher's alignment (send_packet_now's `excl`), so the smallest legal pktlen is exactly one
+         * block: 1 (padding_length) + 1 (a message's minimum payload) rounds up to `block` once the
+         * >=4-bytes-of-padding rule is applied, for every block size this codebase uses (8 or 16) --
+         * there is no cipher-independent constant here the way non-etm's "total size >= 16" is.
+         * A hardcoded 16 (this file's former check) silently over-rejects real, minimal packets from
+         * an 8-byte-block cipher (3des-cbc/blowfish-cbc): e.g. OpenSSH's own 1-byte-payload
+         * USERAUTH_SUCCESS is pktlen=8 under 3des-cbc-etm, found via real interop testing. */
+        if (pktlen < (size_t)d->block || pktlen > SSH_MAX_PACKET || (pktlen % (size_t)d->block)) { ssh_fail(s, "bad packet length"); return -1; }
         total = 4 + pktlen + (size_t)d->maclen;
         if (avail < total) return 0;
         mac_calc(d, s->rx_seq, p, 4 + pktlen, mac);
@@ -422,17 +456,18 @@ static int read_packet(ssh_session *s, const u8 **payload, size_t *plen)
         blk_dec(d, p + 4, pktlen);
     } else {
         u8 mac[64];
+        size_t blk = (size_t)d->block;             /* need only the first block to learn the length */
         if (!s->rx_hdr_done) {
-            if (avail < 16) return 0;
-            blk_dec(d, p, 16);
+            if (avail < blk) return 0;
+            blk_dec(d, p, blk);
             s->rx_pktlen = LOAD32_BE(p);
             s->rx_hdr_done = 1;
         }
         pktlen = s->rx_pktlen;
-        if (pktlen < 12 || pktlen > SSH_MAX_PACKET || ((pktlen + 4) % 16)) { ssh_fail(s, "bad packet length"); return -1; }
+        if (pktlen < 12 || pktlen > SSH_MAX_PACKET || ((pktlen + 4) % blk)) { ssh_fail(s, "bad packet length"); return -1; }
         total = 4 + pktlen + (size_t)d->maclen;
         if (avail < total) return 0;
-        if (4 + pktlen > 16) blk_dec(d, p + 16, 4 + pktlen - 16);
+        if (4 + pktlen > blk) blk_dec(d, p + blk, 4 + pktlen - blk);
         s->rx_hdr_done = 0;
         mac_calc(d, s->rx_seq, p, 4 + pktlen, mac);
         if (ssh_ct_memcmp(mac, p + 4 + pktlen, (size_t)d->maclen) != 0) { ssh_fail(s, "message authentication failed"); return -1; }
@@ -851,17 +886,31 @@ static void setup_dir(ssh_dir *d, int cidx, int midx, const u8 *iv, const u8 *ke
     d->cipher = CIPHERS[cidx].id;
     if (d->cipher == CIPHER_CHACHAPOLY) {
         chachapoly_init(&d->cp, key);
+        return;                                    /* AEAD: no separate MAC to set up */
+    }
+    if (d->cipher == CIPHER_BLOWFISHCBC) {
+        blf_key(&d->bf, key, (size_t)CIPHERS[cidx].keylen);
+        d->cbc = 1;
+        d->block = 8;
+        memcpy(d->cbcv, iv, 8);
+    } else if (d->cipher == CIPHER_3DESCBC) {
+        des3_key(&d->des3, key);
+        d->cbc = 1;
+        d->block = 8;
+        memcpy(d->cbcv, iv, 8);
     } else {
         aes_ctr_init(&d->aes, key, CIPHERS[cidx].keylen, iv);        /* the round keys serve CTR and CBC alike */
-        if (d->cipher == CIPHER_AES256CBC || d->cipher == CIPHER_AES128CBC) {
+        d->block = 16;
+        if (d->cipher == CIPHER_AES256CBC || d->cipher == CIPHER_AES192CBC || d->cipher == CIPHER_AES128CBC) {
             d->cbc = 1;
             memcpy(d->cbcv, iv, 16);
         }
-        d->mackind = MACS[midx].kind;
-        d->etm = MACS[midx].etm;
-        d->maclen = MACS[midx].len;
-        memcpy(d->mackey, mackey, (size_t)d->maclen);
     }
+    d->mackind = MACS[midx].kind;
+    d->etm = MACS[midx].etm;
+    d->maclen = MACS[midx].len;
+    d->mackeylen = MACS[midx].keylen;
+    memcpy(d->mackey, mackey, (size_t)d->mackeylen);
 }
 
 /* The server's reply to our KEX init: type 31 (ECDH / DH reply) or 33 (group-exchange reply). */
