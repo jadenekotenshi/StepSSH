@@ -2,6 +2,7 @@
 #import "ConnectController.h"
 #import "KeyGenController.h"
 #import "SFTPBrowser.h"
+#import "PortForwardController.h"
 #import "UIHelpers.h"
 #include "rng.h"
 #include <sys/types.h>

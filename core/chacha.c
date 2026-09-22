@@ -67,7 +67,9 @@ static void poly_blocks(poly_ctx *p, const u8 *m, size_t bytes, u32 hibit)
     u32 r0 = p->r[0], r1 = p->r[1], r2 = p->r[2], r3 = p->r[3], r4 = p->r[4];
     u32 s1 = r1 * 5, s2 = r2 * 5, s3 = r3 * 5, s4 = r4 * 5;
     u32 h0 = p->h[0], h1 = p->h[1], h2 = p->h[2], h3 = p->h[3], h4 = p->h[4];
-    u64 d0, d1, d2, d3, d4;
+    u64 d0 = 0, d1 = 0, d2 = 0, d3 = 0, d4 = 0;  /* always set before read, every pass of the
+                                                    * while loop below; m68k's dataflow analysis
+                                                    * can't see that across the loop back-edge */
     u32 c;
 
     while (bytes >= 16) {

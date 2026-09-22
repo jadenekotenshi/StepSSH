@@ -211,7 +211,9 @@ int bn_divmod(bn *q, bn *r, const bn *a, const bn *b)
 {
     int m = a->n, n = b->n, s, i, j;
     u32 *un = NULL, *vn = NULL, *qq = NULL;
-    u64 qhat, rhat, p, base = 0x100000000ULL;
+    u64 qhat, rhat, p = 0, base = 0x100000000ULL;  /* p: always set before read (inner loop runs
+                                                      * n>=2 times here); m68k's dataflow analysis
+                                                      * can't see that across the loop back-edge */
     i64 t, k;
     int rc = -1;
 

@@ -150,7 +150,7 @@ static void cb_list(sftp_dirlist *d, void *ctx) { [(SFTPBrowser *)ctx listFinish
 static void cb_step(sftp *s, const sftp_response *r, void *ctx)
 {
     BOOL ok = !(r->type == SFTP_R_STATUS && r->status != SFTP_OK);
-    [(SFTPBrowser *)ctx stepDone:ok message:ok ? @"" : ui_string_from_utf8(r->message)];
+    [(SFTPBrowser *)ctx stepDone:ok message:ok ? (NSString *)@"" : ui_string_from_utf8(r->message)];
 }
 
 static void cb_xfer(sftp_xfer *x, void *ctx) { [(SFTPBrowser *)ctx transferChanged:x]; }
@@ -440,7 +440,7 @@ static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBro
     if (row < 0 || row >= (int)[entries count]) return @"";
     e = [entries objectAtIndex:row];
     if ([ident isEqual:@"name"]) return e->isDir ? [e->name stringByAppendingString:@"/"] : e->name;
-    if ([ident isEqual:@"size"]) return e->isDir ? @"" : ui_format_size(e->size);
+    if ([ident isEqual:@"size"]) return e->isDir ? (NSString *)@"" : ui_format_size(e->size);
     if ([ident isEqual:@"mtime"]) return ui_format_time(e->mtime);
     if ([ident isEqual:@"mode"]) return ui_format_mode(e->perms);
     return @"";
