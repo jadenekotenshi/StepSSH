@@ -95,13 +95,12 @@ has `/` as its home directory on Unix -- nothing to do with Workspace or this ap
 if account setup ever changes.
 
 **Also confirmed on OPENSTEP since:** recursive folder upload and download; dragging files/folders from
-Workspace's File Viewer onto the SFTP browser to upload them (see Drag-and-drop below); and local port
-forwarding (see Port forwarding below).
+Workspace's File Viewer onto the SFTP browser to upload them (see Drag-and-drop below); local port
+forwarding (see Port forwarding below); and mouse reporting in `vim` (see Mouse reporting below) -- the
+last of the four features asked for after v0.0.2, now all confirmed.
 
 **Not yet reported on OPENSTEP:** rename, delete, new folder, `NSSavePanel`/`NSOpenPanel` behaviour,
-window resizing, recovery from a dropped connection, and mouse reporting (which only reached a clean
-*build* on OPENSTEP after a couple of rounds of fixes -- see its own section below -- and has not been
-tried yet).
+window resizing, and recovery from a dropped connection.
 
 ## Getting it into the VM
 
@@ -223,6 +222,8 @@ would mean implementing a small SOCKS4/5 server. Both are plausible future addit
 `direct-tcpip` machinery local forwarding already uses, just not attempted in this pass.
 
 ## Mouse reporting
+
+**Confirmed working on OPENSTEP 4.2** (in `vim`), after a build fix (see below).
 
 When the remote program asks for it (vim, tmux, htop, mc, and most full-screen terminal apps that use
 the mouse), clicks and drags are sent to it instead of doing local text selection -- e.g. clicking to
