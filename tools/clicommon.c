@@ -7,31 +7,60 @@
 #include <pwd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
 #include <netdb.h>
 #include "clicommon.h"
 #include "../core/ssh_types.h"
 #include "../core/knownhosts.h"
 
+/* getaddrinfo()/struct addrinfo (RFC 2553, later POSIX.1-2001) postdate OPENSTEP 4.2 by several
+ * years and are not declared there at all -- gethostbyname()/struct hostent, the API they
+ * replaced, is what genuinely existed on a mid-1990s BSD-derived Unix, so that is what this uses.
+ * IPv4 only, matching this project's stated scope (the README already lists IPv6 as
+ * unsupported); `service` must be numeric (every caller here always passes one). */
 int cli_dial(const char *tool, const char *host, const char *service)
 {
-    struct addrinfo hints, *res, *ai;
-    int fd = -1, gai;
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_socktype = SOCK_STREAM;
-    gai = getaddrinfo(host, service, &hints, &res);
-    if (gai != 0) {
-        fprintf(stderr, "%s: %s: %s\n", tool, host, gai_strerror(gai));
+    struct hostent *he;
+    struct sockaddr_in sin;
+    unsigned long addr, port;
+    char *end;
+    int fd;
+
+    port = strtoul(service, &end, 10);
+    if (*end != '\0' || port == 0 || port > 65535) {
+        fprintf(stderr, "%s: %s: not a valid port number\n", tool, service);
         return -1;
     }
-    for (ai = res; ai; ai = ai->ai_next) {
-        fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
-        if (fd < 0) continue;
-        if (connect(fd, ai->ai_addr, ai->ai_addrlen) == 0) break;
-        close(fd);
-        fd = -1;
+
+    memset(&sin, 0, sizeof(sin));
+    sin.sin_family = AF_INET;
+    sin.sin_port = htons((unsigned short)port);
+
+    /* Not "!= (unsigned long)-1": inet_addr()'s failure sentinel is a 32-bit 0xffffffff, which
+     * zero-extends into a 64-bit unsigned long as 0x00000000ffffffff -- never equal to a 64-bit
+     * all-ones -1, so that comparison never caught a real failure (found on the Mac: it silently
+     * treated a plain hostname as if it had resolved to 255.255.255.255). INADDR_NONE is already
+     * the correctly-typed constant for this exact comparison. */
+    addr = inet_addr(host);
+    if (addr != INADDR_NONE) {
+        sin.sin_addr.s_addr = addr;
+    } else {
+        he = gethostbyname(host);
+        if (!he || he->h_addrtype != AF_INET) {
+            fprintf(stderr, "%s: %s: host not found\n", tool, host);
+            return -1;
+        }
+        memcpy(&sin.sin_addr, he->h_addr_list[0], (size_t)he->h_length);
     }
-    freeaddrinfo(res);
-    if (fd < 0) fprintf(stderr, "%s: cannot connect to %s port %s\n", tool, host, service);
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) { fprintf(stderr, "%s: socket: %s\n", tool, strerror(errno)); return -1; }
+    if (connect(fd, (struct sockaddr *)&sin, sizeof(sin)) != 0) {
+        fprintf(stderr, "%s: cannot connect to %s port %s: %s\n", tool, host, service, strerror(errno));
+        close(fd);
+        return -1;
+    }
     return fd;
 }
 

@@ -282,6 +282,11 @@ echo "no" | "$STEPSSH_KEYGEN" -f "$T/stepkey" -N "" >/dev/null 2>&1
 [ "$(ssh-keygen -y -f "$T/stepkey" 2>/dev/null)" = "$(cat "$T/stepkey.pub")" ] && ok "stepssh-keygen: declines to overwrite without confirmation" || bad "stepssh-keygen overwrite guard"
 
 out=$(runstep echo hello world); [ "$out" = "hello world" ] && ok "stepssh: exec, multi-word command joined like ssh's own argv" || bad "stepssh exec" "$out"
+# A hostname, not a numeric address: cli_dial()'s gethostbyname() path, not its inet_addr() one --
+# these are different code paths (no getaddrinfo() on OPENSTEP 4.2, which predates it), and a
+# hostname is the one real-world use always takes, unlike every other check here (127.0.0.1).
+out=$(HOME="$HOME_STEP" "$STEPSSH" -p $PORT -i "$T/user" -o StrictHostKeyChecking=no "$ME@localhost" echo hostname-ok)
+[ "$out" = "hostname-ok" ] && ok "stepssh: connects by hostname, not just numeric address" || bad "stepssh hostname" "$out"
 runstep 'exit 42'; rc=$?; [ $rc -eq 42 ] && ok "stepssh: remote exit status propagates" || bad "stepssh exit status" "rc=$rc"
 HOME="$HOME_STEP" "$STEPSSH" -p $PORT -i "$T/user" -o StrictHostKeyChecking=no -l "$ME" 127.0.0.1 true >/dev/null 2>&1
 rc=$?; [ $rc -eq 0 ] && ok "stepssh: -l login_name accepted like ssh's own" || bad "stepssh -l" "rc=$rc"
