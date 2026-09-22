@@ -87,10 +87,17 @@ check-objc:
 # Package the sources for transfer into the OPENSTEP VM.
 #   dist/SSH.TAR  plain ustar archive (extract with:  tar xf SSH.TAR)
 #   dist/SSH.ISO  a CD image containing SSH.TAR (attach it as a CD-ROM in the VM)
+# -b 20 matters: without it, macOS's bsdtar pads a regular-file archive only to the minimal
+# 512-byte block boundary (correct per POSIX, but not what old tar implementations assume). Both
+# GNU tar and OPENSTEP-era tar read the archive in fixed 10240-byte (20-block) records, inherited
+# from 9-track tape drives; a final partial record that's short of 10240 bytes makes their very
+# first read() of it come back short, which they report as "unexpected EOF on archive file" even
+# though every byte of real content is present and correct. -b 20 makes bsdtar pad the archive out
+# to a full record with zero bytes, matching what that traditional record-based I/O expects.
 DISTFILES = README.md Makefile.openstep core term app tests tools
 dist:
 	mkdir -p dist
-	COPYFILE_DISABLE=1 tar --format ustar --exclude '*.o' --exclude '.DS_Store' \
+	COPYFILE_DISABLE=1 tar --format ustar -b 20 --exclude '*.o' --exclude '.DS_Store' \
 	    -cf dist/SSH.TAR $(DISTFILES)
 	rm -rf dist/iso && mkdir -p dist/iso && cp dist/SSH.TAR dist/iso/
 	rm -f dist/SSH.ISO dist/SSH.iso dist/SSH.iso.iso
