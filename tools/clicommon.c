@@ -26,6 +26,7 @@
 #include "clicommon.h"
 #include "../core/ssh_types.h"
 #include "../core/knownhosts.h"
+#include "../core/oscompat.h"
 
 /* getaddrinfo()/struct addrinfo (RFC 2553, later POSIX.1-2001) postdate OPENSTEP 4.2 by several
  * years and are not declared there at all -- gethostbyname()/struct hostent, the API they

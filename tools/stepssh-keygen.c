@@ -32,7 +32,10 @@ static int write_file(const char *path, const u8 *p, size_t len, int mode)
 {
     FILE *f = fopen(path, "wb");
     if (!f) return -1;
-    chmod(path, (mode_t)mode);
+    chmod(path, mode);     /* plain int, not (mode_t)mode: core/oscompat.h's chmod() declares it
+                             * that way on purpose (see its own comment) -- mode_t isn't reliably
+                             * a recognised type name here, and a cast to an unrecognised type
+                             * name gets misparsed as a function call instead of a cast. */
     if (len && fwrite(p, 1, len, f) != len) { fclose(f); return -1; }
     return fclose(f);
 }

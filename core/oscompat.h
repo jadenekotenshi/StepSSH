@@ -41,6 +41,17 @@ typedef int ssize_t;      /* no ssize_t at all: POSIX.1-1990 has it, but OPENSTE
  * at all is a hard compile error, not just a warning. */
 extern char *optarg;
 extern int optind;
+extern int getopt(int argc, char **argv, const char *optstring);
+extern int read(int fd, void *buf, int n);
+extern int write(int fd, const void *buf, int n);
+extern int isatty(int fd);
+/* getlogin() returns a pointer -- unlike getopt()/read()/write() above, an implicit declaration
+ * here is not harmless: gcc assumes it returns int, silently truncating the real pointer on any
+ * platform where int and a pointer differ in size (the exact same class of bug strdup() risked
+ * elsewhere in this codebase, not a hypothetical one -- gcc 2.7.2 reported it directly here as
+ * "initialization makes pointer from integer without a cast"). */
+extern char *getlogin(void);
+extern int getuid(void);
 #endif
 
 #endif
