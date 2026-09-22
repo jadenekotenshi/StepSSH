@@ -3,6 +3,7 @@
 #   make -f Makefile.openstep test     # FIRST: run the C unit tests on the real compiler
 #   make -f Makefile.openstep          # build StepSSH.app
 #   make -f Makefile.openstep tools    # build stepssh/stepssh-keygen/stepscp (build/, no AppKit)
+#   make -f Makefile.openstep install  # the above into /LocalApps and /usr/local/bin (see below)
 #   make -f Makefile.openstep fat      # StepSSH.app as an i386+m68k+sparc fat binary (see below)
 #   make -f Makefile.openstep clean
 #
@@ -125,6 +126,25 @@ build/stepscp: tools/stepscp.c tools/clicommon.o $(CORE_OBJS)
 	$(CC) $(CFLAGS) -o build/stepscp tools/stepscp.c tools/clicommon.o $(CORE_OBJS)
 
 tools: build/stepssh build/stepssh-keygen build/stepscp
+
+# ---- install ----
+# OPENSTEP's own conventions: /LocalApps for a locally-built application (parallel to /NextApps
+# for vendor-shipped ones -- see app/StepSSH.iconheader's own comment above), /usr/local/bin for
+# command-line tools. Needs write access to both (root, typically, unless yours are configured
+# otherwise); if mkdir/cp fails for that reason, su or sudo and try again -- this target does not
+# do that itself. UNVERIFIED: written to match OPENSTEP's own directory layout, not yet actually
+# run there.
+BINDIR = /usr/local/bin
+APPDIR = /LocalApps
+
+install: all tools
+	-mkdir /usr/local
+	-mkdir $(BINDIR)
+	cp build/stepssh build/stepssh-keygen build/stepscp $(BINDIR)/
+	-mkdir $(APPDIR)
+	rm -rf $(APPDIR)/$(APP)
+	cp -r $(APP) $(APPDIR)/
+	@echo "installed: $(BINDIR)/stepssh, $(BINDIR)/stepssh-keygen, $(BINDIR)/stepscp, $(APPDIR)/$(APP)"
 
 # ---- optional multi-architecture ("fat") build ----
 # NeXT's cc accepts several -arch flags in one invocation: each source is compiled once per

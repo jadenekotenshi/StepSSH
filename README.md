@@ -124,6 +124,7 @@ tar xf /Volumes/SSH/SSH.TAR
 make -f Makefile.openstep test      # FIRST: the C core on the real compiler
 make -f Makefile.openstep           # builds StepSSH.app
 make -f Makefile.openstep tools     # builds stepssh, stepssh-keygen, stepscp
+make -f Makefile.openstep install   # the above into /LocalApps and /usr/local/bin (see below)
 make -f Makefile.openstep bench     # how long RSA, bcrypt, Diffie-Hellman... take on this CPU
 ```
 
@@ -234,10 +235,13 @@ app, nobody has reported back on these yet, so treat them as unverified there un
 Three tools live alongside `StepSSH.app`, for scripts and anyone who would rather type than click.
 Their real names are lowercase, matching how `ssh`/`ssh-keygen`/`scp` themselves are named even
 though "SSH" is written capitalised in prose -- `make -f Makefile.openstep tools` builds all three
-into `build/` (plain C, no AppKit, so `make tools` also works on the Mac for testing). Syntax
-follows OpenSSH's own tools wherever this engine has the matching capability; where it does not,
-the flag is refused with a one-line explanation rather than silently accepted and ignored -- accepting
-`-L` and then not forwarding anything would look far more like a bug than an error does.
+into `build/` (plain C, no AppKit, so `make tools` also works on the Mac for testing), and
+`make -f Makefile.openstep install` puts them in `/usr/local/bin` and `StepSSH.app` in `/LocalApps`
+(OPENSTEP's own convention for a locally-built application, parallel to `/NextApps` for
+vendor-shipped ones -- needs write access to both, root typically). Syntax follows OpenSSH's own
+tools wherever this engine has the matching capability; where it does not, the flag is refused with
+a one-line explanation rather than silently accepted and ignored -- accepting `-L` and then not
+forwarding anything would look far more like a bug than an error does.
 
 - **`stepssh [-p port] [-l login_name] [-i identity_file] [-c ciphers] [-m macs] [-o option] [-q]
   [-v] [-t] [-T] [user@]hostname [command]`** -- an interactive shell (with a real pty, the local
