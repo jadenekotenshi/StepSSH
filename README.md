@@ -1,4 +1,4 @@
-# Secure Shell for OPENSTEP 4.2
+# StepSSH for OPENSTEP 4.2
 
 A native SSH-2 client with a GUI terminal, an SFTP file browser and an in-app key generator,
 written in C and Objective-C for OPENSTEP 4.2 (gcc 2.7.2, Foundation/AppKit). There is no
@@ -79,7 +79,7 @@ ESC -- or may not send ESC at all. Nothing has been changed for them yet; guessi
 data risks the same wrong-fix problem the arrows almost had. If any of them misbehave, run
 
 ```sh
-touch ~/.SecureShell.trace
+touch ~/.StepSSH.trace
 ```
 
 press the misbehaving key on its own a couple of times, and send the file -- a lone ESC entry followed by
@@ -88,7 +88,7 @@ knowing what character appeared in the remote editor is enough to extend the sam
 next paragraph).
 
 **Second finding from that trace, unrelated to the arrow keys, now explained:** `cwd` and `HOME` were both `/`
-when launched from Workspace Manager, which is also why the trace file turned up at `/.SecureShell.trace`
+when launched from Workspace Manager, which is also why the trace file turned up at `/.StepSSH.trace`
 rather than inside a home directory. The author was testing logged in as `root`, whose account traditionally
 has `/` as its home directory on Unix -- nothing to do with Workspace or this app. `NSHomeDirectory()`,
 `getenv("HOME")` and `NSUserName()` stay logged at startup regardless, since they're cheap and worth having
@@ -119,7 +119,7 @@ tar xf /Volumes/SSH/SSH.TAR
 
 ```sh
 make -f Makefile.openstep test      # FIRST: the C core on the real compiler
-make -f Makefile.openstep           # builds SecureShell.app
+make -f Makefile.openstep           # builds StepSSH.app
 make -f Makefile.openstep bench     # how long RSA, bcrypt, Diffie-Hellman... take on this CPU
 ```
 
@@ -127,18 +127,18 @@ Expect `crypto: 843`, `vt: 223`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79`
 (If the machine has no `/dev/urandom`, the RNG test prints a note that it is crediting synthetic
 entropy; that is expected.) `make` on OPENSTEP has no `mkdir -p`, so the makefile avoids it.
 
-Run the app from a Terminal to see its startup messages (they begin `SecureShell:`):
+Run the app from a Terminal to see its startup messages (they begin `StepSSH:`):
 
 ```sh
-./SecureShell.app/SecureShell
+./StepSSH.app/StepSSH
 ```
 
 ### Launching from Workspace
 
-`SecureShell.app` is deliberately just a folder holding the executable: that is all NeXT's own
+`StepSSH.app` is deliberately just a folder holding the executable: that is all NeXT's own
 `Edit.app` has (apart from its language folders). What Workspace does *not* find in the folder is the
 icon: NeXT links the application icon and file-type table into the executable, as a read-only
-`__ICON` segment, using `app/SecureShell.iconheader` and `app/SecureShell.tiff`. `Makefile.openstep`
+`__ICON` segment, using `app/StepSSH.iconheader` and `app/StepSSH.tiff`. `Makefile.openstep`
 does the same (`-sectcreate __ICON ...`; if your `cc` rejects those flags it says so and links without
 an icon). To see what was linked in:
 
@@ -150,11 +150,11 @@ If double-clicking still does nothing, find out how far the launch got. Workspac
 application's stderr, so the startup messages can also go to a file, which is used only if it exists:
 
 ```sh
-touch ~/.SecureShell.trace               # then launch from Workspace
-cat ~/.SecureShell.trace                 # argv, working directory, and each startup step reached
+touch ~/.StepSSH.trace               # then launch from Workspace
+cat ~/.StepSSH.trace                 # argv, working directory, and each startup step reached
 ```
 
-(`open` behaves like Workspace. `rm ~/.SecureShell.trace` turns tracing off again.)
+(`open` behaves like Workspace. `rm ~/.StepSSH.trace` turns tracing off again.)
 
 ### Things still worth watching on OPENSTEP (marked `[V]` in `app/Compat.h`)
 
@@ -299,7 +299,7 @@ app/    Objective-C, all UI built in code (no nibs):
         AppController ConnectController KeyGenController SSHSession SFTPBrowser
         PortForward PortForwardController
         TerminalView PromptPanel SecretField UIHelpers Compat.h main.m
-        SecureShell.iconheader, SecureShell.tiff   the application icon (linked in as __ICON)
+        StepSSH.iconheader, StepSSH.tiff   the application icon (linked in as __ICON)
 tests/  unit tests, interop.sh, session/UI smoke tests, tests/keys/ (real ssh-keygen output)
 tools/  table/vector generators, sshc (CLI SSH), sftpc (CLI SFTP), mkkey, bench, lint
 ```
@@ -346,7 +346,7 @@ The engines are *sans-I/O* on purpose: the same code is driven by a blocking `se
 ```sh
 python3 tools/gen_tables.py core       # SHA-2/MD5/AES/Blowfish/curve/DH constants, derived and verified
 python3 tools/gen_nsenc.py             # NeXTSTEP encoding, from tools/NEXTSTEP.TXT
-python3 tools/gen_icon.py              # app/SecureShell.tiff, in the layout NeXT's Edit.app uses
+python3 tools/gen_icon.py              # app/StepSSH.tiff, in the layout NeXT's Edit.app uses
 python3 tools/gen_vectors.py           # tests/vectors.h (independent reference implementations;
                                         # AES-GCM vectors need libcrypto reachable via ctypes --
                                         # `openssl enc` has no usable AEAD/tag support to shell out to)

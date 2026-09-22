@@ -458,7 +458,7 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
     /* A lone, unmodified ESC is held rather than sent immediately, in case it is the first half of
      * an arrow key (see escPending above); resolved within escTimeout if nothing else arrives.
      * Anything else unrecognized here is only logged, never held -- never ordinary printable text,
-     * which could be something typed at a shell prompt.  Enable with: touch ~/.SecureShell.trace */
+     * which could be something typed at a shell prompt.  Enable with: touch ~/.StepSSH.trace */
     if (c == 0x1b && [chars length] == 1 && flags == 0) {
         escPending = YES;
         escTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:self

@@ -1,8 +1,8 @@
-# Build Secure Shell on OPENSTEP 4.2 (gcc 2.7.2).  Works with NeXT make or GNU make.
+# Build StepSSH on OPENSTEP 4.2 (gcc 2.7.2).  Works with NeXT make or GNU make.
 #
 #   make -f Makefile.openstep test     # FIRST: run the C unit tests on the real compiler
-#   make -f Makefile.openstep          # build SecureShell.app
-#   make -f Makefile.openstep fat      # SecureShell.app as an i386+m68k+sparc fat binary (see below)
+#   make -f Makefile.openstep          # build StepSSH.app
+#   make -f Makefile.openstep fat      # StepSSH.app as an i386+m68k+sparc fat binary (see below)
 #   make -f Makefile.openstep clean
 #
 # No GNU-make features are used (no wildcard, no pattern rules) so the stock
@@ -14,14 +14,14 @@ DEFS     = -DOPENSTEP
 ARCHS    =                        # e.g. -arch i386 -arch m68k -arch sparc; see `fat` below
 CFLAGS   = $(OPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 LIBS     = -framework AppKit -framework Foundation
-APP      = SecureShell.app
+APP      = StepSSH.app
 
 # Workspace takes an application's icon (and its file-type table) from a read-only __ICON segment
 # linked into the executable, not from a file in the .app folder (compare /NextApps/Edit.app, whose
-# only non-language files are the executable and some TIFFs).  app/SecureShell.iconheader says which
-# icon belongs to the app; app/SecureShell.tiff is the icon (regenerate: python3 tools/gen_icon.py).
-ICONHDR   = app/SecureShell.iconheader
-ICONTIFF  = app/SecureShell.tiff
+# only non-language files are the executable and some TIFFs).  app/StepSSH.iconheader says which
+# icon belongs to the app; app/StepSSH.tiff is the icon (regenerate: python3 tools/gen_icon.py).
+ICONHDR   = app/StepSSH.iconheader
+ICONTIFF  = app/StepSSH.tiff
 ICONFLAGS = -sectcreate __ICON __header $(ICONHDR) -segprot __ICON r r -sectcreate __ICON app $(ICONTIFF)
 
 CORE_OBJS = core/aes.o core/bcrypt.o core/bignum.o core/blowfish.o core/chacha.o core/des.o core/ecc.o core/gcm.o core/hmac.o \
@@ -40,16 +40,16 @@ APP_OBJS  = app/AppController.o app/ConnectController.o app/KeyGenController.o \
 .m.o:
 	$(CC) $(CFLAGS) -c $< -o $@
 
-all: $(APP)/SecureShell
+all: $(APP)/StepSSH
 
-$(APP)/SecureShell: $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONHDR) $(ICONTIFF)
+$(APP)/StepSSH: $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONHDR) $(ICONTIFF)
 	-mkdir $(APP)
 	@( cd $(APP) ) >/dev/null 2>&1 || { echo "make: $(APP) is missing or is not a directory:"; ls -ld $(APP); echo "remove it and run make again"; exit 1; }
-	$(CC) $(ARCHS) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONFLAGS) $(LIBS) || { echo "make: linking with the __ICON segment failed; retrying without an icon"; $(CC) $(ARCHS) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(LIBS); }
+	$(CC) $(ARCHS) -o $(APP)/StepSSH $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONFLAGS) $(LIBS) || { echo "make: linking with the __ICON segment failed; retrying without an icon"; $(CC) $(ARCHS) -o $(APP)/StepSSH $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(LIBS); }
 
 # Show what was linked in: expect a segment __ICON with sections __header and app.
 iconcheck:
-	otool -l $(APP)/SecureShell | grep -A 3 __ICON
+	otool -l $(APP)/StepSSH | grep -A 3 __ICON
 
 # ---- unit tests (plain C, no AppKit) ----
 # NOTE: OPENSTEP's mkdir has no -p option (it would create a directory named "-p").
@@ -112,7 +112,7 @@ test: build/test_crypto build/test_vt build/test_sftp build/test_bignum build/te
 # OPENSTEP CD sets, and this Makefile has no way to know whether yours has them.
 #
 #   make -f Makefile.openstep fat-check    # fast: does cc even accept these -arch flags here?
-#   make -f Makefile.openstep fat          # full: SecureShell.app as an i386+m68k+sparc fat binary
+#   make -f Makefile.openstep fat          # full: StepSSH.app as an i386+m68k+sparc fat binary
 #   make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different arch set
 #
 # UNVERIFIED beyond "it links and lipo reports the right slices": this codebase has so far only
@@ -132,8 +132,8 @@ fat-check:
 
 fat: clean
 	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS)"
-	@echo "== fat link done; architectures actually present in $(APP)/SecureShell: =="
-	lipo -info $(APP)/SecureShell
+	@echo "== fat link done; architectures actually present in $(APP)/StepSSH: =="
+	lipo -info $(APP)/StepSSH
 
 clean:
 	rm -f core/*.o term/*.o app/*.o

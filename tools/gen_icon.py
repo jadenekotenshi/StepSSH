@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Generate app/SecureShell.tiff, the application icon, in the layout NeXT's own tools write.
+"""Generate app/StepSSH.tiff, the application icon, in the layout NeXT's own tools write.
 
-    python3 tools/gen_icon.py                      # writes app/SecureShell.tiff
+    python3 tools/gen_icon.py                      # writes app/StepSSH.tiff
     python3 tools/gen_icon.py --preview out.png    # also writes an 8x preview of both images
     python3 tools/gen_icon.py --show FILE.tiff out.png   # decode any NeXT icon TIFF to a PNG
 
@@ -257,7 +257,7 @@ def main(argv):
     if len(argv) == 4 and argv[1] == '--show':
         preview(decode(open(argv[2], 'rb').read()), argv[3])
         return 0
-    out = 'app/SecureShell.tiff'
+    out = 'app/StepSSH.tiff'
     data = build_tiff(draw())
     open(out, 'wb').write(data)
     print("wrote %s (%d bytes)" % (out, len(data)))

@@ -1,7 +1,7 @@
 # build output
 build/
 dist/
-SecureShell.app/
+StepSSH.app/
 *.o
 *.dSYM/
 

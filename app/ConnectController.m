@@ -126,7 +126,7 @@
 {
     if (!panel) [self buildPanel];
     [panel makeKeyAndOrderFront:nil];
-    NSLog(@"SecureShell: New Connection panel ordered front (visible: %d)", (int)[panel isVisible]);
+    NSLog(@"StepSSH: New Connection panel ordered front (visible: %d)", (int)[panel isVisible]);
     [panel makeFirstResponder:hostField];
 }
 

@@ -19,7 +19,7 @@ NSString *ui_format_size(unsigned long long n);       /* "1.5 MB" */
 NSString *ui_format_time(unsigned secs_since_1970);   /* "2026-09-21 15:04" in local time */
 NSString *ui_format_mode(unsigned perms);             /* "drwxr-xr-x" */
 
-/* Startup diagnostics.  If the file ~/.SecureShell.trace exists (create it with `touch`), SSTrace()
+/* Startup diagnostics.  If the file ~/.StepSSH.trace exists (create it with `touch`), SSTrace()
  * appends printf-style lines to it; otherwise it does nothing.  Workspace discards a launched
  * application's stderr, so this is how to see how far a launch from Workspace got. */
 void SSTrace(const char *fmt, ...);

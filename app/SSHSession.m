@@ -232,7 +232,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
         if (attempt >= 3) { [self status:@"Three wrong passphrases; not using this key."]; return; }
         pass = [PromptPanel askSecret:[NSString stringWithFormat:@"%@Passphrase for key %@:",
                                        attempt ? @"Incorrect. Try again. " : @"", keyPath]
-                                title:@"Secure Shell"];
+                                title:@"StepSSH"];
         if (!pass) { [self status:@"No passphrase given; not using this key."]; return; }
         /* bcrypt-pbkdf is deliberately slow: seconds on an old CPU.  Say so before the window freezes. */
         [self status:@"Unlocking key (this can take several seconds on a slow machine) ..."];
@@ -519,7 +519,7 @@ New fingerprint:\n%@",
     if (has_method(methods, "password") && passwordTries < 3) {
         prompt = [NSString stringWithFormat:@"%@%@@%@'s password:",
                   passwordTries ? @"Try again. " : @"", user, host];
-        pw = [PromptPanel askSecret:prompt title:@"Secure Shell"];
+        pw = [PromptPanel askSecret:prompt title:@"StepSSH"];
         if (!pw) { [self endWithMessage:@"Authentication cancelled"]; return; }
         passwordTries++;
         ssh_auth_password(ssh, pw);
@@ -553,10 +553,10 @@ New fingerprint:\n%@",
         NSString *p = [NSString stringWithCString:ssh_kbdint_prompt(ssh, i, &echo)];
         if ([heading length]) p = [NSString stringWithFormat:@"%@\n%@", heading, p];
         if (echo) {
-            NSString *t = [PromptPanel askText:p title:@"Secure Shell"];
+            NSString *t = [PromptPanel askText:p title:@"StepSSH"];
             if (t) answers[i] = dup_cstr([t cString]); else ok = 0;
         } else {
-            answers[i] = [PromptPanel askSecret:p title:@"Secure Shell"];
+            answers[i] = [PromptPanel askSecret:p title:@"StepSSH"];
             if (!answers[i]) ok = 0;
         }
         heading = @"";

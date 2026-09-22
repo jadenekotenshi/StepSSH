@@ -198,7 +198,7 @@ int main(int argc, char *argv[])
             remove([tr cString]);
             trace_to(tr, "must not be written: %d", 1);
             EXPECT(stat([tr cString], &st) != 0, "the trace does nothing, and creates nothing, when the trace file is absent");
-            fclose(fopen([tr cString], "w"));                          /* the user runs: touch ~/.SecureShell.trace */
+            fclose(fopen([tr cString], "w"));                          /* the user runs: touch ~/.StepSSH.trace */
             trace_to(tr, "first %s %d", "line", 7);
             trace_to(tr, "second");
             text = [NSString stringWithContentsOfFile:tr];

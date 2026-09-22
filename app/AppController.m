@@ -105,7 +105,7 @@
 
 - (void)buildMenu
 {
-    NSMenu *main = [[[NSMenu alloc] initWithTitle:@"Secure Shell"] autorelease];
+    NSMenu *main = [[[NSMenu alloc] initWithTitle:@"StepSSH"] autorelease];
     NSMenu *m;
 
     m = [self submenuNamed:@"Info" inMenu:main];
@@ -140,7 +140,7 @@
 
 - (void)showAbout:(id)sender
 {
-    NSRunAlertPanel(@"Secure Shell",
+    NSRunAlertPanel(@"StepSSH",
                     @"An SSH-2 client for OPENSTEP.\n\nCiphers: chacha20-poly1305, aes-ctr\nKey exchange: curve25519-sha256\nHost/user keys: ssh-ed25519",
                     @"OK", nil, nil);
 }
@@ -158,19 +158,19 @@
 - (void)applicationDidFinishLaunching:(NSNotification *)notification
 {
     launched = YES;
-    NSLog(@"SecureShell: applicationDidFinishLaunching");
+    NSLog(@"StepSSH: applicationDidFinishLaunching");
     SSTrace("applicationDidFinishLaunching");
     [self prepareSecurityDirectory];
     ssh_rng_seed_system();                              /* /dev/urandom, if this system has one */
     ssh_rng_load_seed([seedPath cString]);              /* and last run's seed (replaced immediately) */
-    NSLog(@"SecureShell: random pool holds %d of %d bits", ssh_rng_credited(), SSH_RNG_MIN_BITS);
+    NSLog(@"StepSSH: random pool holds %d of %d bits", ssh_rng_credited(), SSH_RNG_MIN_BITS);
     SSTrace("random pool holds %d of %d bits", ssh_rng_credited(), SSH_RNG_MIN_BITS);
     if (ssh_rng_ready()) {
         ssh_rng_save_seed([seedPath cString]);
         [self newConnection:nil];
         return;
     }
-    NSLog(@"SecureShell: not enough entropy; showing the seeding panel");
+    NSLog(@"StepSSH: not enough entropy; showing the seeding panel");
     /* Not enough entropy yet: ask the user to wiggle the mouse. */
     {
         NSTextField *label;
@@ -208,7 +208,7 @@
 - (void)newConnection:(id)sender
 {
     if (!ssh_rng_ready()) return;
-    NSLog(@"SecureShell: showing the New Connection panel");
+    NSLog(@"StepSSH: showing the New Connection panel");
     [connectController showPanel];
 }
 
@@ -283,7 +283,7 @@
     for (i = 0; i < (int)[sessions count]; i++)
         if ([[sessions objectAtIndex:i] isActive]) active++;
     if (active == 0) return YES;
-    return NSRunAlertPanel(@"Quit Secure Shell?",
+    return NSRunAlertPanel(@"Quit StepSSH?",
                            @"%d connection(s) are still open and will be disconnected.",
                            @"Quit", @"Cancel", nil, active) == NSAlertDefaultReturn;
 }
