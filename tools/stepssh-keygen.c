@@ -23,6 +23,7 @@
 #include <sys/stat.h>
 #include "../core/ssh_key.h"
 #include "../core/rng.h"
+#include "../core/oscompat.h"
 #include "clicommon.h"
 
 static int quiet;

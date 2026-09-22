@@ -12,16 +12,20 @@
  * Argument types are int/pointer everywhere, which matches the i386 calling
  * convention whatever the headers' own typedefs (mode_t, pid_t) are.
  *
- * select()'s declaration below needs fd_set and struct timeval already visible, so a file that
- * uses select() must include <sys/types.h> (fd_set) and <sys/time.h> (struct timeval) itself
- * before this header, same as it would for any other system header's types -- there is no
- * <sys/select.h> on OPENSTEP 4.2 to pull those in together (that split is a POSIX.1-2001
- * convention, a good decade newer).
+ * select()'s declaration below needs fd_set and struct timeval -- pulled in here directly
+ * (<sys/types.h>, <sys/time.h>; harmless to re-include if the caller already did, headers guard
+ * themselves) rather than left as a requirement on whatever else the including file happens to
+ * include, since a file with no reason of its own to need select() (stepssh-keygen.c, say) would
+ * otherwise fail on *this* header's own declaration instead. There is no <sys/select.h> on
+ * OPENSTEP 4.2 to pull those two in together (that split is a POSIX.1-2001 convention, a good
+ * decade newer).
  */
 #ifndef SSH_OSCOMPAT_H
 #define SSH_OSCOMPAT_H
 
 #ifdef OPENSTEP
+#include <sys/types.h>
+#include <sys/time.h>
 extern int close(int fd);
 extern int getpid(void);
 extern int chmod(const char *path, int mode);
@@ -31,6 +35,12 @@ extern int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds
 typedef int ssize_t;      /* no ssize_t at all: POSIX.1-1990 has it, but OPENSTEP 4.2 predates
                             * even that catching up in its own headers. int matches read()/write()'s
                             * actual i386 ABI return width here, same reasoning as the note above. */
+/* getopt() itself works via the usual implicit-int-returning-function assumption (harmless: it
+ * really does return int), but optarg/optind are variables, not functions -- there is no such
+ * thing as an "implicit declaration" for those, so referencing them with no declaration in scope
+ * at all is a hard compile error, not just a warning. */
+extern char *optarg;
+extern int optind;
 #endif
 
 #endif
