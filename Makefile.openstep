@@ -169,15 +169,22 @@ install: all tools
 # also confirmed the resulting .pkg is a flat directory of <Name>.bom (binary)/.info (text)/.sizes
 # (text: NumFiles/InstalledSize/CompressedSize)/.tar.Z (old `compress`, not gzip), which is what
 # `package` should produce here too, and settled DiskName's casing and two optional fields
-# (UseUserMask, LongFileNames) the HOWTO didn't mention.
+# (UseUserMask, LongFileNames) the HOWTO didn't mention. Real hardware then caught what neither
+# source did: `package` build fine with keyword/value pairs padded to line up in columns, but
+# Installer.app failed to open the result with "file StepSSH.info contains no DiskName field" --
+# `package` is a csh script (per the HOWTO), and very plausibly splits each line on whitespace
+# naively, in a way multiple consecutive spaces (rather than the single space every field in the
+# real OpenWrite.info example actually uses) breaks. Single-spaced now, matching that example
+# exactly instead of the more readable aligned columns.
 #
 #   make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools, for Installer.app
 #   make -f Makefile.openstep pkg-fat      # same, but the app + tools are i386+m68k+sparc fat
 #
-# UNVERIFIED: the .pkg *format* is now confirmed against a real shipped package, but running
-# /NextAdmin/Installer.app/package itself -- and Installer.app actually accepting what it
-# produces -- is not: still not yet tested on a real machine. If `package` doesn't exist at that
-# path, or rejects the .info file, report back exactly what happened.
+# UNVERIFIED: still not confirmed that Installer.app accepts the result end to end. If it still
+# rejects the .info file, or anything else about the built .pkg looks wrong, send over the exact
+# contents of the StepSSH.info that ends up inside the built StepSSH.pkg (not just this recipe's
+# intermediate copy) so it can be compared directly against a known-good one instead of guessed at
+# again.
 PKG     = StepSSH.pkg
 PKGROOT = pkgroot
 PKGINFO = StepSSH.info
@@ -191,15 +198,15 @@ pkg-assemble:
 	mkdir $(PKGROOT)/usr/local
 	mkdir $(PKGROOT)/usr/local/bin
 	cp build/stepssh build/stepssh-keygen build/stepscp $(PKGROOT)/usr/local/bin/
-	echo "Title            StepSSH" > $(PKGINFO)
-	echo "Version          $(VERSION)" >> $(PKGINFO)
-	echo "Description      SSH-2 client, plus the stepssh/stepssh-keygen/stepscp command-line tools." >> $(PKGINFO)
-	echo "DefaultLocation  /" >> $(PKGINFO)
-	echo "DiskName         StepSSH" >> $(PKGINFO)
-	echo "Relocatable      NO" >> $(PKGINFO)
-	echo "Application      YES" >> $(PKGINFO)
-	echo "UseUserMask      YES" >> $(PKGINFO)
-	echo "LongFileNames    YES" >> $(PKGINFO)
+	echo "Title StepSSH" > $(PKGINFO)
+	echo "Version $(VERSION)" >> $(PKGINFO)
+	echo "Description SSH-2 client, plus the stepssh/stepssh-keygen/stepscp command-line tools." >> $(PKGINFO)
+	echo "DefaultLocation /" >> $(PKGINFO)
+	echo "DiskName StepSSH" >> $(PKGINFO)
+	echo "Relocatable NO" >> $(PKGINFO)
+	echo "Application YES" >> $(PKGINFO)
+	echo "UseUserMask YES" >> $(PKGINFO)
+	echo "LongFileNames YES" >> $(PKGINFO)
 	/NextAdmin/Installer.app/package $(PKGROOT)/ $(PKGINFO)
 	rm -rf $(PKGROOT) $(PKGINFO)
 	@echo "built $(PKG) via the real Installer.app/package tool -- still UNVERIFIED end to end, see this target's own comment above"

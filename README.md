@@ -155,10 +155,12 @@ property list) `.info` format directly, and confirmed against a real shipped pac
 contents (Lighthouse Design's OpenWrite 2.1) -- a `.pkg` is a flat directory of `<Name>.bom`
 (binary)/`.info` (text)/`.sizes` (text)/`.tar.Z` (old `compress`, not gzip), which also settled
 `DiskName`'s casing and two optional `.info` fields (`UseUserMask`, `LongFileNames`) the HOWTO
-didn't mention. **Still UNVERIFIED end to end**: the `.pkg` *format* is now confirmed against a
-real package, but running `/NextAdmin/Installer.app/package` itself -- and Installer.app actually
-accepting what it produces -- is not. If `package` doesn't exist at that path, or rejects the
-`.info` file, report back exactly what happened.
+didn't mention. Real hardware then caught what neither source did: `package` built fine with
+keyword/value pairs padded into aligned columns, but Installer.app then failed to open the result
+with `file StepSSH.info contains no DiskName field` -- `package` is a csh script, and very
+plausibly splits each line on whitespace naively, in a way multiple consecutive spaces (rather
+than the single space every field in the real OpenWrite.info example actually uses) breaks.
+Single-spaced now, matching that example exactly. **Still UNVERIFIED end to end.**
 
 ### Fat (multi-architecture) binaries
 
