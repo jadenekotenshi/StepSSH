@@ -140,13 +140,21 @@ make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools
 make -f Makefile.openstep pkg-fat      # StepSSH.pkg: i386+m68k+sparc fat app + tools
 ```
 
-Assembles a `StepSSH.pkg` -- an `<Name>.info` metadata file plus the app and tools laid out under
-`/LocalApps` and `/usr/local/bin`, the directory structure NeXT/OPENSTEP's own Installer.app reads
--- and runs `mkbom` over it for a `<Name>.bom` bill-of-materials, if `mkbom` is present.
-**UNVERIFIED**: assembled from documentation/memory of the Installer package format, not yet tested
-against a real Installer.app -- unlike the header-gap fixes elsewhere in this codebase, there was no
-real machine to check the exact `.info` fields or `mkbom`'s invocation against before writing this.
-If Installer.app rejects it, report back exactly what happened.
+Lays out the app and tools under `/LocalApps` and `/usr/local/bin` in a "fake root" tree, writes an
+`.info` metadata file, and hands both to the real packaging tool NEXTSTEP/OPENSTEP's Installer.app
+ships (`/NextAdmin/Installer.app/package`) -- which builds the compressed archive, the `.bom`
+(bill of materials), and the `.sizes` file itself, and drops the finished `StepSSH.pkg` in place.
+An earlier version of this target hand-assembled a `.pkg`-shaped folder directly instead of calling
+`package`, using a `{ Key = value; }` `.info` syntax guessed from general NeXT property-list
+conventions; Workspace Manager opened the result as a plain folder rather than handing it to
+Installer.app, presumably because it never went through the real tool that produces the format
+Workspace actually recognises. Rebuilt against ["Making Packages
+I"](https://web.archive.org/web/20221229175934/http://www.nextcomputers.org/NeXTfiles/Software/NEXTSTEP/Developer/making_nextstep_packages.pdf),
+a NEXTSTEP packaging HOWTO that documents `package` and the (plain `Keyword value` line, not a
+property list) `.info` format directly. **Still UNVERIFIED end to end**: the path to `package` and
+the `.info` keys it accepts come from that document, not from a real OPENSTEP 4.2 machine. If
+`/NextAdmin/Installer.app/package` doesn't exist there, or rejects the `.info` file, report back
+exactly what happened.
 
 ### Fat (multi-architecture) binaries
 

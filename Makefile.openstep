@@ -153,26 +153,32 @@ install: all tools
 	@echo "installed: $(BINDIR)/stepssh, $(BINDIR)/stepssh-keygen, $(BINDIR)/stepscp, $(APPDIR)/$(APP)"
 
 # ---- Installer package (.pkg) ----
-# NeXT/OPENSTEP's own Installer.app (/NextAdmin) reads a package as a directory named "<Name>.pkg"
-# holding an "<Name>.info" metadata file (old-style NeXT property list: "{ Key = value; ... }") plus
-# the payload laid out as an actual directory tree alongside it, and optionally a "<Name>.bom"
-# bill-of-materials -- built by mkbom(1) if present, the direct ancestor of the .bom format modern
-# macOS installer packages still use.
+# Built with the real packaging tool, not a hand-rolled imitation of its output: NEXTSTEP/OPENSTEP's
+# Installer.app ships a csh script, /NextAdmin/Installer.app/package, that takes a "fake root" tree
+# (the payload, laid out under DefaultLocation as if it were / -- e.g. LocalApps/StepSSH.app for
+# DefaultLocation "/") and an ".info" file, and does everything else itself: builds the compressed
+# archive, the .bom (bill of materials), and the .sizes file, and drops the finished "<info-file
+# basename>.pkg" in the directory `package` was run from. The .info file itself is NOT a NeXT-style
+# "{ Key = value; }" property list (an earlier version of this target guessed that, and Workspace
+# Manager opened the result as a plain folder instead of handing it to Installer.app -- almost
+# certainly because it never went through the real tool that produces the format Workspace actually
+# recognises) -- it's plain "Keyword<whitespace>value" lines, one per line. Source, since none of
+# this could be checked against a real machine directly: "Making Packages I" (NEXTSTEP packaging
+# HOWTO), https://web.archive.org/web/20221229175934/http://www.nextcomputers.org/NeXTfiles/Software/NEXTSTEP/Developer/making_nextstep_packages.pdf
 #
 #   make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools, for Installer.app
 #   make -f Makefile.openstep pkg-fat      # same, but the app + tools are i386+m68k+sparc fat
 #
-# UNVERIFIED: assembled from documentation/memory of the NEXTSTEP/OPENSTEP Installer package
-# format, not yet tested against a real Installer.app on real hardware -- unlike the header-gap
-# fixes elsewhere in this codebase, there was no way to check the exact .info fields or mkbom's
-# invocation against the real machine before writing this. If Installer.app rejects it, or mkbom
-# doesn't exist/take these arguments, report back exactly what happened (or what `man package`/
-# `man mkbom` say) so this can be corrected against the real thing instead of a guess.
+# UNVERIFIED: the package-building mechanism itself (path to `package`, the .info keys and their
+# accepted values) comes from that document, not from this machine -- still not yet tested against
+# a real Installer.app. If /NextAdmin/Installer.app/package doesn't exist at that path, or rejects
+# the .info file, report back exactly what happened.
 PKG     = StepSSH.pkg
 PKGROOT = pkgroot
+PKGINFO = StepSSH.info
 
 pkg-assemble:
-	rm -rf $(PKG) $(PKGROOT)
+	rm -rf $(PKG) $(PKGROOT) $(PKGINFO)
 	mkdir $(PKGROOT)
 	mkdir $(PKGROOT)/LocalApps
 	cp -r $(APP) $(PKGROOT)/LocalApps/
@@ -180,19 +186,16 @@ pkg-assemble:
 	mkdir $(PKGROOT)/usr/local
 	mkdir $(PKGROOT)/usr/local/bin
 	cp build/stepssh build/stepssh-keygen build/stepscp $(PKGROOT)/usr/local/bin/
-	mkdir $(PKG)
-	cp -r $(PKGROOT)/LocalApps $(PKG)/LocalApps
-	cp -r $(PKGROOT)/usr $(PKG)/usr
-	echo '{' > $(PKG)/StepSSH.info
-	echo '    Title = "StepSSH";' >> $(PKG)/StepSSH.info
-	echo '    Version = "$(VERSION)";' >> $(PKG)/StepSSH.info
-	echo '    Description = "SSH-2 client, plus the stepssh/stepssh-keygen/stepscp command-line tools.";' >> $(PKG)/StepSSH.info
-	echo '    DefaultLocation = "/";' >> $(PKG)/StepSSH.info
-	echo '    Relocatable = NO;' >> $(PKG)/StepSSH.info
-	echo '}' >> $(PKG)/StepSSH.info
-	-mkbom $(PKGROOT) $(PKG)/StepSSH.bom
-	rm -rf $(PKGROOT)
-	@echo "built $(PKG) -- UNVERIFIED against a real Installer.app; see this target's own comment above"
+	echo "Title            StepSSH" > $(PKGINFO)
+	echo "Version          $(VERSION)" >> $(PKGINFO)
+	echo "Description      SSH-2 client, plus the stepssh/stepssh-keygen/stepscp command-line tools." >> $(PKGINFO)
+	echo "DefaultLocation  /" >> $(PKGINFO)
+	echo "Diskname         StepSSH" >> $(PKGINFO)
+	echo "Relocatable      NO" >> $(PKGINFO)
+	echo "Application      YES" >> $(PKGINFO)
+	/NextAdmin/Installer.app/package $(PKGROOT)/ $(PKGINFO)
+	rm -rf $(PKGROOT) $(PKGINFO)
+	@echo "built $(PKG) via the real Installer.app/package tool -- still UNVERIFIED end to end, see this target's own comment above"
 
 pkg: all tools pkg-assemble
 
@@ -260,4 +263,4 @@ install-fat: clean
 
 clean:
 	rm -f core/*.o term/*.o app/*.o tools/*.o
-	rm -rf build $(APP) $(PKG) $(PKGROOT)
+	rm -rf build $(APP) $(PKG) $(PKGROOT) $(PKGINFO)
