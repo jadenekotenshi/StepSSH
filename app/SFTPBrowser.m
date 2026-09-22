@@ -106,14 +106,14 @@ typedef struct dirent ss_dirent;
 }
 - (void)setOwner:(id)anObject { owner = anObject; }
 
-- (NSDragOperation)draggingEntered:(id <NSDraggingInfo>)sender
+- (SSDragOp)draggingEntered:(id <NSDraggingInfo>)sender
 {
     NSPasteboard *pb = [sender draggingPasteboard];
     if (![pb availableTypeFromArray:[NSArray arrayWithObject:NSFilenamesPboardType]]) return NSDragOperationNone;
     if (owner && ![owner isReady]) return NSDragOperationNone;      /* not connected: nothing to drop onto */
     return NSDragOperationCopy;
 }
-- (NSDragOperation)draggingUpdated:(id <NSDraggingInfo>)sender { return [self draggingEntered:sender]; }
+- (SSDragOp)draggingUpdated:(id <NSDraggingInfo>)sender { return [self draggingEntered:sender]; }
 - (BOOL)prepareForDragOperation:(id <NSDraggingInfo>)sender { return YES; }
 - (BOOL)performDragOperation:(id <NSDraggingInfo>)sender
 {

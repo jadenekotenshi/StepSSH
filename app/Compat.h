@@ -41,6 +41,19 @@ extern void PSshow(const char *s);
 
 #define BACKTAB_CHAR    0x19            /* Shift-Tab */
 
+/* [V] The return type of -draggingEntered:/-draggingUpdated: (SFTPBrowser.m's SFTPTableView).  This
+ * OPENSTEP install rejects the type name NSDragOperation outright ("undefined type") even though the
+ * NSDragOperationNone/Copy constants -- plain integers, not typedef'd -- compile fine; apparently no
+ * typedef of that name exists here.  unsigned int is what the type is defined to be on a 32-bit
+ * target regardless of what (if anything) that name resolves to, so it is ABI-compatible either way;
+ * the dev host still returns the real NSDragOperation, to avoid an actual width mismatch against the
+ * 64-bit modern SDK's own declaration of the same informal protocol method. */
+#ifdef OPENSTEP
+typedef unsigned int SSDragOp;
+#else
+typedef NSDragOperation SSDragOp;
+#endif
+
 /* Dev-host builds use a newer SDK where a few selectors changed type; nothing to do. */
 
 #endif
