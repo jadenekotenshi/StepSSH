@@ -72,15 +72,12 @@ then press Up, Down, Left and Right *individually* (so each direction's pair is 
 Tab, Home/End/Page Up/Down and F1-F12, and read the file. `NSHomeDirectory()`, `getenv("HOME")` and
 `NSUserName()` are now logged separately at startup too (see the next paragraph).
 
-**Second finding from that trace, unrelated to the arrow keys:** `cwd` and `HOME` were both `/` when
-launched from Workspace Manager -- `NSHomeDirectory()` resolved to the root directory, which is also why the
-trace file turned up at `/.SecureShell.trace` rather than inside a home directory. If this has been true on
-every launch (not just from Workspace), saved hosts, generated keys and `known_hosts` are likely sitting in
-`/.ssh` rather than where you'd expect. This looks like an OPENSTEP account/environment detail rather than
-anything this app controls -- worth checking `NSHomeDirectory()` vs `getenv("HOME")` vs `NSUserName()` in the
-next trace to see whether `$HOME` simply is not set for Workspace-launched apps (fixable by setting it
-somewhere Workspace-launched processes inherit it) or your account's own home directory is genuinely
-configured as `/` (fixable in the account itself, e.g. NetInfo or `/etc/passwd`).
+**Second finding from that trace, unrelated to the arrow keys, now explained:** `cwd` and `HOME` were both `/`
+when launched from Workspace Manager, which is also why the trace file turned up at `/.SecureShell.trace`
+rather than inside a home directory. The author was testing logged in as `root`, whose account traditionally
+has `/` as its home directory on Unix -- nothing to do with Workspace or this app. `NSHomeDirectory()`,
+`getenv("HOME")` and `NSUserName()` stay logged at startup regardless, since they're cheap and worth having
+if account setup ever changes.
 
 **Not yet reported on OPENSTEP:** rename, delete, new folder, `NSSavePanel`/`NSOpenPanel` behaviour,
 recursive folder upload/download (new; only tested against a real server on the Mac so far -- see
