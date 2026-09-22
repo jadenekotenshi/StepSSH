@@ -640,7 +640,7 @@ static void bytes_to_key(const char *pass, const u8 *salt8, u8 *key, size_t keyl
 static int parse_pem_format(const char *text, size_t len, const char *passphrase, ssh_key *out, const char **err)
 {
     static const char *kinds[] = { "RSA PRIVATE KEY", "EC PRIVATE KEY", "PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "DSA PRIVATE KEY" };
-    const char *p = text, *end = text + len, *body, *endmark, *line;
+    const char *p = text, *end = text + len, *body = NULL, *endmark, *line;
     char begin[48], finish[48];
     int kind = -1, i, encrypted = 0, keylen = 0, rc = -1;
     u8 iv[16];

@@ -9,6 +9,13 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <dirent.h>
+#ifdef OPENSTEP
+/* On this system <dirent.h> is found but does not typedef DIR (gcc: "undefined type, found DIR") --
+ * the classic BSD header, which some NeXT-lineage libcs keep the real declarations in, still might.
+ * Safe to add unconditionally: if <dirent.h> already declared everything, this is just a harmless
+ * second inclusion (header guards make it a no-op); it is not removing or replacing anything. */
+#include <sys/dir.h>
+#endif
 #include <errno.h>
 
 /* ------------------------------------------------------------------ */
