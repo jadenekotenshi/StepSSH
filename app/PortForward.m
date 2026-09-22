@@ -8,6 +8,15 @@
 #include <netinet/in.h>
 #include "oscompat.h"
 
+#ifndef O_NONBLOCK
+#define O_NONBLOCK O_NDELAY            /* OPENSTEP's <fcntl.h> has no O_NONBLOCK; see app/SSHSession.m */
+#endif
+
+#ifdef OPENSTEP
+/* OPENSTEP's headers lack a prototype for this (see app/SSHSession.m, which hit the same thing). */
+extern int fcntl(int fd, int cmd, ...);
+#endif
+
 @implementation PortTunnel
 - (id)init
 {
