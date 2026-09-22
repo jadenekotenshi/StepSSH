@@ -151,10 +151,14 @@ Installer.app, presumably because it never went through the real tool that produ
 Workspace actually recognises. Rebuilt against ["Making Packages
 I"](https://web.archive.org/web/20221229175934/http://www.nextcomputers.org/NeXTfiles/Software/NEXTSTEP/Developer/making_nextstep_packages.pdf),
 a NEXTSTEP packaging HOWTO that documents `package` and the (plain `Keyword value` line, not a
-property list) `.info` format directly. **Still UNVERIFIED end to end**: the path to `package` and
-the `.info` keys it accepts come from that document, not from a real OPENSTEP 4.2 machine. If
-`/NextAdmin/Installer.app/package` doesn't exist there, or rejects the `.info` file, report back
-exactly what happened.
+property list) `.info` format directly, and confirmed against a real shipped package's actual
+contents (Lighthouse Design's OpenWrite 2.1) -- a `.pkg` is a flat directory of `<Name>.bom`
+(binary)/`.info` (text)/`.sizes` (text)/`.tar.Z` (old `compress`, not gzip), which also settled
+`DiskName`'s casing and two optional `.info` fields (`UseUserMask`, `LongFileNames`) the HOWTO
+didn't mention. **Still UNVERIFIED end to end**: the `.pkg` *format* is now confirmed against a
+real package, but running `/NextAdmin/Installer.app/package` itself -- and Installer.app actually
+accepting what it produces -- is not. If `package` doesn't exist at that path, or rejects the
+`.info` file, report back exactly what happened.
 
 ### Fat (multi-architecture) binaries
 

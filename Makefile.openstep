@@ -162,17 +162,22 @@ install: all tools
 # "{ Key = value; }" property list (an earlier version of this target guessed that, and Workspace
 # Manager opened the result as a plain folder instead of handing it to Installer.app -- almost
 # certainly because it never went through the real tool that produces the format Workspace actually
-# recognises) -- it's plain "Keyword<whitespace>value" lines, one per line. Source, since none of
-# this could be checked against a real machine directly: "Making Packages I" (NEXTSTEP packaging
-# HOWTO), https://web.archive.org/web/20221229175934/http://www.nextcomputers.org/NeXTfiles/Software/NEXTSTEP/Developer/making_nextstep_packages.pdf
+# recognises) -- it's plain "Keyword<whitespace>value" lines, one per line: confirmed by both
+# "Making Packages I" (NEXTSTEP packaging HOWTO),
+# https://web.archive.org/web/20221229175934/http://www.nextcomputers.org/NeXTfiles/Software/NEXTSTEP/Developer/making_nextstep_packages.pdf,
+# and a real shipped package's actual .pkg contents (Lighthouse Design's OpenWrite 2.1) -- which
+# also confirmed the resulting .pkg is a flat directory of <Name>.bom (binary)/.info (text)/.sizes
+# (text: NumFiles/InstalledSize/CompressedSize)/.tar.Z (old `compress`, not gzip), which is what
+# `package` should produce here too, and settled DiskName's casing and two optional fields
+# (UseUserMask, LongFileNames) the HOWTO didn't mention.
 #
 #   make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools, for Installer.app
 #   make -f Makefile.openstep pkg-fat      # same, but the app + tools are i386+m68k+sparc fat
 #
-# UNVERIFIED: the package-building mechanism itself (path to `package`, the .info keys and their
-# accepted values) comes from that document, not from this machine -- still not yet tested against
-# a real Installer.app. If /NextAdmin/Installer.app/package doesn't exist at that path, or rejects
-# the .info file, report back exactly what happened.
+# UNVERIFIED: the .pkg *format* is now confirmed against a real shipped package, but running
+# /NextAdmin/Installer.app/package itself -- and Installer.app actually accepting what it
+# produces -- is not: still not yet tested on a real machine. If `package` doesn't exist at that
+# path, or rejects the .info file, report back exactly what happened.
 PKG     = StepSSH.pkg
 PKGROOT = pkgroot
 PKGINFO = StepSSH.info
@@ -190,9 +195,11 @@ pkg-assemble:
 	echo "Version          $(VERSION)" >> $(PKGINFO)
 	echo "Description      SSH-2 client, plus the stepssh/stepssh-keygen/stepscp command-line tools." >> $(PKGINFO)
 	echo "DefaultLocation  /" >> $(PKGINFO)
-	echo "Diskname         StepSSH" >> $(PKGINFO)
+	echo "DiskName         StepSSH" >> $(PKGINFO)
 	echo "Relocatable      NO" >> $(PKGINFO)
 	echo "Application      YES" >> $(PKGINFO)
+	echo "UseUserMask      YES" >> $(PKGINFO)
+	echo "LongFileNames    YES" >> $(PKGINFO)
 	/NextAdmin/Installer.app/package $(PKGROOT)/ $(PKGINFO)
 	rm -rf $(PKGROOT) $(PKGINFO)
 	@echo "built $(PKG) via the real Installer.app/package tool -- still UNVERIFIED end to end, see this target's own comment above"
