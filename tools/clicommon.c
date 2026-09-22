@@ -26,6 +26,7 @@
 #include "clicommon.h"
 #include "../core/ssh_types.h"
 #include "../core/knownhosts.h"
+#include "../core/rng.h"
 #include "../core/oscompat.h"
 
 /* getaddrinfo()/struct addrinfo (RFC 2553, later POSIX.1-2001) postdate OPENSTEP 4.2 by several
@@ -165,6 +166,33 @@ const char *cli_default_known_hosts(void)
         strcpy(buf, "known_hosts");
     }
     return buf;
+}
+
+const char *cli_default_seed_path(void)
+{
+    static char buf[1024];
+    const char *home = getenv("HOME");
+    if (home && strlen(home) + 20 < sizeof(buf)) {
+        strcpy(buf, home);
+        strcat(buf, "/.ssh/random_seed");
+    } else {
+        strcpy(buf, "random_seed");
+    }
+    return buf;
+}
+
+int cli_seed_rng(const char *tool)
+{
+    const char *path = cli_default_seed_path();
+    ssh_rng_seed_system();      /* /dev/urandom, if this machine has one (never on OPENSTEP 4.2) */
+    ssh_rng_load_seed(path);    /* a prior run's seed -- this tool's own, or StepSSH.app's GUI */
+    if (ssh_rng_ready()) return 1;
+    fprintf(stderr, "%s: not enough entropy to run safely yet (%d of %d bits credited)\n",
+            tool, ssh_rng_credited(), SSH_RNG_MIN_BITS);
+    fprintf(stderr, "%s: run StepSSH.app once first -- it prompts you to move the mouse to seed\n"
+                    "%s: %s, which every StepSSH tool (including this one) then reuses\n",
+            tool, tool, path);
+    return 0;
 }
 
 int cli_check_hostkey(const char *tool, const char *known_hosts_path, const char *host, int port,

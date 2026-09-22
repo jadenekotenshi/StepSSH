@@ -252,7 +252,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (!ssh_rng_seed_system()) { fprintf(stderr, "stepscp: no system entropy\n"); return 2; }
+    if (!cli_seed_rng("stepscp")) return 2;
     if (keyfile) {
         FILE *f = fopen(keyfile, "rb");
         size_t n; const char *err; const char *pass = getenv("STEPSSH_PASSPHRASE"); int rc, tries;

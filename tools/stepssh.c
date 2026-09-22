@@ -146,7 +146,7 @@ int main(int argc, char **argv)
         }
     }
 
-    if (!ssh_rng_seed_system()) { fprintf(stderr, "stepssh: no system entropy\n"); return 2; }
+    if (!cli_seed_rng("stepssh")) return 2;
     if (keyfile) { if (load_key(keyfile, &key) != 0) return 2; have_key = 1; }
 
     fd = cli_dial("stepssh", host, port);

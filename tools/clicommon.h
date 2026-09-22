@@ -67,4 +67,17 @@ const char *cli_current_user(void);
  * through and no caller to report back to except the shell that ran them. */
 char *cli_xstrdup(const char *s);
 
+/* "<HOME>/.ssh/random_seed", in a static buffer; "random_seed" if HOME is unset -- the same path
+ * and file StepSSH.app's GUI itself reads and maintains (app/AppController.m). A machine that has
+ * ever run the GUI once (which prompts for mouse movement to seed an empty pool) already has what
+ * a non-interactive CLI tool needs; nothing here can prompt for mouse movement itself. */
+const char *cli_default_seed_path(void);
+
+/* Seed the RNG (core/rng.h) from /dev/urandom (present on the Mac; never on OPENSTEP 4.2) and the
+ * persisted seed file at cli_default_seed_path() (present anywhere StepSSH.app's GUI has already
+ * run once). On success returns 1. On failure -- an OPENSTEP machine the GUI has never run on --
+ * prints a "<tool>: ..." message explaining why and what to do about it, and returns 0; there is
+ * deliberately no fallback that hands out bytes without enough real entropy behind them. */
+int cli_seed_rng(const char *tool);
+
 #endif

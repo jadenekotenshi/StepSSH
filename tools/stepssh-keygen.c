@@ -22,7 +22,6 @@
 #include <errno.h>
 #include <sys/stat.h>
 #include "../core/ssh_key.h"
-#include "../core/rng.h"
 #include "../core/oscompat.h"
 #include "clicommon.h"
 
@@ -130,7 +129,7 @@ int main(int argc, char **argv)
         if (!newpass) { fprintf(stderr, "stepssh-keygen: aborted\n"); return 1; }
     }
 
-    if (!ssh_rng_seed_system()) { fprintf(stderr, "stepssh-keygen: no system entropy\n"); return 1; }
+    if (!cli_seed_rng("stepssh-keygen")) return 1;
     if (!quiet) fprintf(stderr, "Generating public/private ed25519 key pair.\n");
     if (ssh_key_generate_ed25519(&k, comment) != 0) { fprintf(stderr, "stepssh-keygen: key generation failed\n"); return 1; }
 
