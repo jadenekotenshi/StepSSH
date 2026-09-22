@@ -3,7 +3,20 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
+/* POSIX termios (tcgetattr/tcsetattr) postdates OPENSTEP 4.2: its <termios.h> declares them (no
+ * compile error) but its libc never implements them (a link error: "Undefined symbols: _tcgetattr,
+ * _tcsetattr", found on real hardware) -- same vintage mismatch as getaddrinfo()/sys/select.h
+ * before it, just one step further along (header present, symbol absent, instead of the header
+ * itself being absent). What a 4.3BSD-derived system like this genuinely has instead is the much
+ * older "sgtty" ioctl interface (TIOCGETP/TIOCSETP, struct sgttyb) that termios was later built to
+ * replace -- BSD's own RAW mode bit is, historically, close to the direct ancestor of what
+ * termios's cfmakeraw() constructs from individual flags. */
+#ifdef OPENSTEP
+#include <sys/ioctl.h>
+#include <sgtty.h>
+#else
 #include <termios.h>
+#endif
 #include <pwd.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -81,8 +94,12 @@ int cli_has_method(const char *list, const char *m)
 char *cli_read_secret(const char *tool, const char *prompt)
 {
     static char buf[256];
+#ifdef OPENSTEP
+    struct sgttyb oldt, newt;
+#else
     struct termios oldt, newt;
-    int have_termios;
+#endif
+    int have_tty;
     size_t n;
 
     if (!isatty(0)) {
@@ -91,18 +108,35 @@ char *cli_read_secret(const char *tool, const char *prompt)
     }
     fputs(prompt, stderr);
     fflush(stderr);
-    have_termios = tcgetattr(0, &oldt) == 0;
-    if (have_termios) {
+#ifdef OPENSTEP
+    have_tty = ioctl(0, TIOCGETP, &oldt) == 0;
+    if (have_tty) {
+        newt = oldt;
+        newt.sg_flags &= ~ECHO;
+        ioctl(0, TIOCSETP, &newt);
+    }
+#else
+    have_tty = tcgetattr(0, &oldt) == 0;
+    if (have_tty) {
         newt = oldt;
         newt.c_lflag &= (tcflag_t)~ECHO;
         tcsetattr(0, TCSAFLUSH, &newt);
     }
+#endif
     if (!fgets(buf, sizeof(buf), stdin)) {
-        if (have_termios) tcsetattr(0, TCSAFLUSH, &oldt);
+#ifdef OPENSTEP
+        if (have_tty) ioctl(0, TIOCSETP, &oldt);
+#else
+        if (have_tty) tcsetattr(0, TCSAFLUSH, &oldt);
+#endif
         fputc('\n', stderr);
         return NULL;
     }
-    if (have_termios) tcsetattr(0, TCSAFLUSH, &oldt);
+#ifdef OPENSTEP
+    if (have_tty) ioctl(0, TIOCSETP, &oldt);
+#else
+    if (have_tty) tcsetattr(0, TCSAFLUSH, &oldt);
+#endif
     fputc('\n', stderr);
     n = strlen(buf);
     while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r')) buf[--n] = '\0';
@@ -168,6 +202,29 @@ int cli_check_hostkey(const char *tool, const char *known_hosts_path, const char
 
 /* Only one raw-mode terminal is ever active at a time in these tools, so a single static save
  * slot (rather than something the caller would need to store and pass back by pointer) is enough. */
+#ifdef OPENSTEP
+static struct sgttyb cli_raw_saved;
+
+int cli_raw_enter(int fd)
+{
+    struct sgttyb raw;
+    if (!isatty(fd)) return -1;
+    if (ioctl(fd, TIOCGETP, &cli_raw_saved) != 0) return -1;
+    raw = cli_raw_saved;
+    raw.sg_flags |= RAW;     /* no line editing, no signal-generating characters, 8-bit clean --
+                               * both directions (BSD's RAW predates, and is close kin to, what
+                               * termios's cfmakeraw() builds from individual flags elsewhere) */
+    raw.sg_flags &= ~ECHO;
+    ioctl(fd, TIOCSETP, &raw);
+    return 1;
+}
+
+void cli_raw_restore(int fd, int token)
+{
+    if (token != 1) return;
+    ioctl(fd, TIOCSETP, &cli_raw_saved);
+}
+#else
 static struct termios cli_raw_saved;
 
 int cli_raw_enter(int fd)
@@ -190,6 +247,7 @@ void cli_raw_restore(int fd, int token)
     if (token != 1) return;
     tcsetattr(fd, TCSAFLUSH, &cli_raw_saved);
 }
+#endif
 
 void cli_split_userhost(const char *arg, const char *deflogin, char **user, char **host)
 {
