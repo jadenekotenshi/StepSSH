@@ -21,6 +21,9 @@
     int        lastCx, lastCy, lastSb;
     int        deleteSendsBackspace;       /* 1: Delete key sends ^H, 0: sends DEL */
     int        altSendsEscape;
+    BOOL           pendingEsc;             /* diagnostic only: a lone, unmodified ESC keyDown just
+                                             * happened; the very next keyDown logs how long after */
+    NSTimeInterval pendingEscTime;
     NSColor   *defaultFg, *defaultBg;
     NSColor   *palette[256];
 }

@@ -377,6 +377,19 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
     if (!chars || [chars length] == 0) return;
     c = [chars characterAtIndex:0];
 
+    /* Diagnostic only: a lone ESC was JUST reported as its own, unrecognized keyDown (see below).
+     * A single physical arrow key that OPENSTEP is delivering as ESC-then-letter (the old VT52
+     * convention, not the KEYCH_UP-style single codepoint this file assumes) would show up as two
+     * back-to-back keyDown events; a person pressing Escape and then typing something would not be
+     * back-to-back the same way. This says which one it looks like, without logging what was typed. */
+    if (pendingEsc) {
+        double dt = [theEvent timestamp] - pendingEscTime;
+        pendingEsc = NO;
+        SSTrace("keyDown: char U+%04X (%d chars, mods 0x%x) arrived %.1f ms after a bare ESC -- %s",
+                (unsigned)c, (int)[chars length], flags, dt * 1000.0,
+                dt < 0.05 ? "close enough to be one physical keypress" : "too far apart for that");
+    }
+
     if ((flags & NSShiftKeyMask) && (c == KEYCH_PGUP || c == KEYCH_PGDN)) {        /* local scrollback */
         [self scrollByLines:(c == KEYCH_PGUP ? rows - 1 : -(rows - 1))];
         return;
@@ -432,6 +445,10 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
     if (c > 0x7e || (c < 0x20 && c != 0x09 && c != 0x0d)) {
         SSTrace("keyDown: unrecognized key, first char U+%04X (%d chars total), modifierFlags 0x%x",
                 (unsigned)c, (int)[chars length], flags);
+        if (c == 0x1b && [chars length] == 1 && flags == 0) {
+            pendingEsc = YES;
+            pendingEscTime = [theEvent timestamp];
+        }
     }
     [self sendString:chars];
 }

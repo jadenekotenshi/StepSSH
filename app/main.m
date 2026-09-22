@@ -2,6 +2,7 @@
 #import "AppController.h"
 #import "UIHelpers.h"
 #include <signal.h>
+#include <stdlib.h>
 
 /*
  * Startup is narrated with NSLog so a launch that "does nothing" can be diagnosed:
@@ -20,7 +21,11 @@ int main(int argc, char *argv[])
     SSTrace("---- starting, argc=%d", argc);
     for (i = 0; i < argc; i++) SSTrace("  argv[%d] = %s", i, argv[i]);
     SSTrace("  cwd  = %s", SSCS([[NSFileManager defaultManager] currentDirectoryPath]));
-    SSTrace("  HOME = %s", SSCS(NSHomeDirectory()));
+    SSTrace("  NSHomeDirectory() = %s", SSCS(NSHomeDirectory()));
+    /* NSHomeDirectory() may or may not consult $HOME; logging both settles which one, if either,
+     * is wrong when they disagree (reported: both "/" when launched from Workspace). */
+    SSTrace("  getenv(\"HOME\")   = %s", getenv("HOME") ? getenv("HOME") : "(not set)");
+    SSTrace("  NSUserName()      = %s", SSCS(NSUserName()));
     signal(SIGPIPE, SIG_IGN);                 /* a dropped connection must not kill the app */
 
     NS_DURING

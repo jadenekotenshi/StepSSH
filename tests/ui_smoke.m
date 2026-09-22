@@ -239,7 +239,15 @@ int main(int argc, char *argv[])
                "a plain capital A is sent as itself, not mistaken for an arrow key");
         /* An unrecognized special key also logs to ~/.SecureShell.trace via the same SSTrace()
          * mechanism tested generically in 2c above (NSHomeDirectory cannot be redirected from a
-         * test, so the real destination file is not touched here). */
+         * test, so the real destination file is not touched here). The ESC-then-next-key timing
+         * diagnostic only observes and logs -- it must not change what either key sends. */
+        kc->calls = 0;
+        [tv keyDown:key_event(0x1b)];
+        EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 0x1b, "a lone ESC keypress is still sent as itself");
+        kc->calls = 0;
+        [tv keyDown:key_event('A')];
+        EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 'A',
+               "and the keypress right after it is still sent as itself, unaffected by the timing check");
 
         /* 5. selection */
         [tv selectAll:nil];

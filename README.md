@@ -53,16 +53,34 @@ Also confirmed: copy and paste within the VM, and SFTP upload/download.
 **Known bug, reported by the author:** the arrow keys print a literal `A`/`B`/`C`/`D` instead of moving the
 cursor. `vt_encode_key()` itself is fully unit-tested and produces the right VT100 sequence, so the break is
 in `-[NSEvent characters]` not delivering the `NSUpArrowFunctionKey`-style codepoints (0xF700...) that
-`app/Compat.h` assumed -- exactly the item marked `[V]` there. There is no safe blind fix: `A`/`B`/`C`/`D`
-are also valid text, so guessing wrong would break ordinary typing instead. `app/TerminalView.m` now logs
-any *unrecognized* special key (never ordinary text) to the trace file described above; run
+`app/Compat.h` assumed -- exactly the item marked `[V]` there. A first trace capture (one keypress) showed
+the *entire* content of that keyDown event was a lone ESC (`U+001B`) -- not "ESC then A" in one event, and
+not "A" alone. Since ordinary printable text is deliberately never logged, the "A" that appeared on screen
+must have arrived as a second, separate keyDown event straight after -- consistent with OPENSTEP using the
+old VT52 convention (`ESC A`/`ESC B`/`ESC C`/`ESC D` for the four arrow keys) rather than a single codepoint.
+There is no safe blind fix from one sample: a real, deliberate Escape keypress (common in vi) followed by
+ordinary typing would look the same unless the timing between the two events is known, and only one
+direction was tried. `app/TerminalView.m` now also logs, for the keypress immediately following a lone ESC,
+how many milliseconds after it arrived -- close together (under 50 ms) points at one physical key producing
+two events; far apart points at two unrelated keypresses. Run
 
 ```sh
 touch ~/.SecureShell.trace
 ```
 
-then press each arrow key, Backspace, Tab, Home/End/Page Up/Down and F1-F12 once, and read the file --
-the codepoints it reports are what `app/Compat.h`'s `KEYCH_*` constants need to become.
+then press Up, Down, Left and Right *individually* (so each direction's pair is on its own), plus Backspace,
+Tab, Home/End/Page Up/Down and F1-F12, and read the file. `NSHomeDirectory()`, `getenv("HOME")` and
+`NSUserName()` are now logged separately at startup too (see the next paragraph).
+
+**Second finding from that trace, unrelated to the arrow keys:** `cwd` and `HOME` were both `/` when
+launched from Workspace Manager -- `NSHomeDirectory()` resolved to the root directory, which is also why the
+trace file turned up at `/.SecureShell.trace` rather than inside a home directory. If this has been true on
+every launch (not just from Workspace), saved hosts, generated keys and `known_hosts` are likely sitting in
+`/.ssh` rather than where you'd expect. This looks like an OPENSTEP account/environment detail rather than
+anything this app controls -- worth checking `NSHomeDirectory()` vs `getenv("HOME")` vs `NSUserName()` in the
+next trace to see whether `$HOME` simply is not set for Workspace-launched apps (fixable by setting it
+somewhere Workspace-launched processes inherit it) or your account's own home directory is genuinely
+configured as `/` (fixable in the account itself, e.g. NetInfo or `/etc/passwd`).
 
 **Not yet reported on OPENSTEP:** rename, delete, new folder, `NSSavePanel`/`NSOpenPanel` behaviour,
 recursive folder upload/download (new; only tested against a real server on the Mac so far -- see
