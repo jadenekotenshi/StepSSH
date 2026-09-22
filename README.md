@@ -160,10 +160,12 @@ cat ~/.SecureShell.trace                 # argv, working directory, and each sta
 - `-[NSOpenPanel setCanChooseDirectories:]` (used so *Upload* can pick a folder to upload
   recursively): part of the OpenStep specification and present in GNUstep's from-scratch
   reimplementation of it, so it should be there, but is not yet confirmed on OPENSTEP 4.2 itself.
-- **`opendir`/`readdir`/`closedir`** (walking a local folder for a recursive upload): new to this
-  codebase. If OPENSTEP's headers are missing prototypes for these (as they were for several other
-  POSIX calls -- see `core/oscompat.h`), the warnings look the same as those did; report them and
-  they get added there.
+- **`opendir`/`readdir`/`closedir`/`DIR`** (walking a local folder for a recursive upload): on this
+  OPENSTEP install, `<dirent.h>` is found but does not `typedef DIR`; `<sys/dir.h>`, the classic BSD
+  header, does, but pairs it with `struct direct` (the pre-POSIX name) instead of `struct dirent` --
+  `app/SFTPBrowser.m` picks the right one per platform. `struct direct.d_name` is assumed to be
+  NUL-terminated, as `struct dirent.d_name` is; true of every implementation checked, but not
+  independently confirmed for this one.
 
 ## Speed on an old CPU
 

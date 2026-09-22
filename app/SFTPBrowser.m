@@ -17,6 +17,16 @@
 #include <sys/dir.h>
 #endif
 #include <errno.h>
+#include "oscompat.h"
+
+#ifdef OPENSTEP
+/* readdir() pairs with <sys/dir.h>'s DIR here and returns struct direct * (the classic BSD name),
+ * not struct dirent * (the POSIX name this file otherwise assumes, and what the host build gets) --
+ * both have a d_name field, which is all this file uses. */
+typedef struct direct ss_dirent;
+#else
+typedef struct dirent ss_dirent;
+#endif
 
 /* ------------------------------------------------------------------ */
 /* a plain progress bar                                                */
@@ -620,7 +630,7 @@ static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBro
 {
     NSString *localBase = [walkLocal retain], *remoteBase = [walkRemote retain];
     DIR *dp;
-    struct dirent *de;
+    ss_dirent *de;
     int insertAt = 0;
     busy = NO;
     if (walkCancelled) {
@@ -646,9 +656,9 @@ static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBro
         rp = [remoteBase stringByAppendingPathComponent:name];
         if (stat([lp cString], &st) != 0) continue;                   /* vanished, or unreadable: skip it */
         j = [NSMutableDictionary dictionary];
-        if (S_ISDIR(st.st_mode)) {
+        if (SFTP_S_ISDIR((unsigned long)st.st_mode)) {
             [j setObject:@"walkupload" forKey:@"op"]; [j setObject:lp forKey:@"a"]; [j setObject:rp forKey:@"b"];
-        } else if (S_ISREG(st.st_mode)) {
+        } else if (SFTP_S_ISREG((unsigned long)st.st_mode)) {
             [j setObject:@"put" forKey:@"op"]; [j setObject:lp forKey:@"a"]; [j setObject:rp forKey:@"b"];
         } else {
             continue;                                                 /* devices, fifos, etc.: not uploaded */
@@ -722,7 +732,7 @@ static void cb_walkmkdir(sftp *s, const sftp_response *r, void *ctx) { [(SFTPBro
         BOOL exists = NO, isDir;
         for (j = 0; j < (int)[entries count]; j++)
             if ([((SFTPEntry *)[entries objectAtIndex:j])->name isEqual:leaf]) exists = YES;
-        isDir = (stat([local cString], &st) == 0 && S_ISDIR(st.st_mode));
+        isDir = (stat([local cString], &st) == 0 && SFTP_S_ISDIR((unsigned long)st.st_mode));
         if (exists && NSRunAlertPanel(@"Replace?",
                 isDir ? @"A folder named %@ already exists on the server. Its contents will be merged."
                       : @"%@ already exists on the server.",
