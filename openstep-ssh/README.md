@@ -42,16 +42,12 @@ recursive folder transfers, drag-and-drop, RSA/ECDSA key *generation* (ed25519 o
   upload/download byte-for-byte.
 - `make ui-smoke`, `make lint`, `make check-objc`.
 
-**Confirmed on OPENSTEP 4.2** (86Box, Pentium II/400, reported by the author): `make -f Makefile.openstep
-test` passes and the app builds; it launches from Workspace Manager and `open`, with its icon; terminal text
-renders; the New Connection panel lays out correctly; first-run entropy seeding works; password and
-public-key logins work; key generation works; the file browser opens on a connection; `bench` timings are
-reasonable on that CPU.
+**NOT verified on OPENSTEP itself** (only your machine can): text drawing through `PSshow`,
+function-key codes, `NSTableView`/`NSScroller`/`NSSavePanel` behaviour, and the visual layout
+of every panel. `make -f Makefile.openstep test` passing on your VM is what proves the C core on
+gcc 2.7.2; everything in `app/` is checked only by the Mac-side smoke tests above.
 
-**Not yet reported on OPENSTEP:** function-key codes (arrows, Backspace, function keys, Tab), copy and
-paste, window resizing, individual SFTP operations (upload, download, rename, delete, `NSSavePanel`
-behaviour), and recovery from a dropped connection. Everything in `app/` beyond the list above is checked
-only by the Mac-side smoke tests.
+Password login and the `keyboard-interactive` path were confirmed on a real host by the user.
 
 ## Getting it into the VM
 
@@ -84,28 +80,8 @@ Run the app from a Terminal to see its startup messages (they begin `SecureShell
 ./SecureShell.app/SecureShell
 ```
 
-### Launching from Workspace
-
-`SecureShell.app` is deliberately just a folder holding the executable: that is all NeXT's own
-`Edit.app` has (apart from its language folders). What Workspace does *not* find in the folder is the
-icon: NeXT links the application icon and file-type table into the executable, as a read-only
-`__ICON` segment, using `app/SecureShell.iconheader` and `app/SecureShell.tiff`. `Makefile.openstep`
-does the same (`-sectcreate __ICON ...`; if your `cc` rejects those flags it says so and links without
-an icon). To see what was linked in:
-
-```sh
-make -f Makefile.openstep iconcheck      # expect: segname __ICON, sections __header and app
-```
-
-If double-clicking still does nothing, find out how far the launch got. Workspace throws away the
-application's stderr, so the startup messages can also go to a file, which is used only if it exists:
-
-```sh
-touch ~/.SecureShell.trace               # then launch from Workspace
-cat ~/.SecureShell.trace                 # argv, working directory, and each startup step reached
-```
-
-(`open` behaves like Workspace. `rm ~/.SecureShell.trace` turns tracing off again.)
+If a launch from Workspace does nothing but the Terminal launch works, the problem is the `.app`
+folder layout, not the code.
 
 ### Things still worth watching on OPENSTEP (marked `[V]` in `app/Compat.h`)
 
@@ -154,7 +130,6 @@ term/   vt.c (terminal emulator core), nsenc.c (NeXTSTEP <-> Unicode)
 app/    Objective-C, all UI built in code (no nibs):
         AppController ConnectController KeyGenController SSHSession SFTPBrowser
         TerminalView PromptPanel SecretField UIHelpers Compat.h main.m
-        SecureShell.iconheader, SecureShell.tiff   the application icon (linked in as __ICON)
 tests/  unit tests, interop.sh, session/UI smoke tests, tests/keys/ (real ssh-keygen output)
 tools/  table/vector generators, sshc (CLI SSH), sftpc (CLI SFTP), mkkey, bench, lint
 ```
@@ -189,7 +164,6 @@ The engines are *sans-I/O* on purpose: the same code is driven by a blocking `se
 ```sh
 python3 tools/gen_tables.py core       # SHA-2/MD5/AES/Blowfish/curve/DH constants, derived and verified
 python3 tools/gen_nsenc.py             # NeXTSTEP encoding, from tools/NEXTSTEP.TXT
-python3 tools/gen_icon.py              # app/SecureShell.tiff, in the layout NeXT's Edit.app uses
 python3 tools/gen_vectors.py           # tests/vectors.h (independent reference implementations)
 python3 tools/gen_bn_vectors.py        # big-integer vectors from Python's integers
 python3 tools/gen_ec_vectors.py        # curve vectors from OpenSSL
