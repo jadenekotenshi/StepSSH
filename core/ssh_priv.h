@@ -7,6 +7,7 @@
 #include "aes.h"
 #include "blowfish.h"
 #include "des.h"
+#include "gcm.h"
 #include "chacha.h"
 #include "bignum.h"
 #include "hmac.h"
@@ -54,7 +55,7 @@
 #define M_CHAN_FAILURE     100
 
 enum { CIPHER_NONE = 0, CIPHER_CHACHAPOLY, CIPHER_AES256CTR, CIPHER_AES128CTR, CIPHER_AES256CBC, CIPHER_AES128CBC,
-       CIPHER_AES192CTR, CIPHER_AES192CBC, CIPHER_BLOWFISHCBC, CIPHER_3DESCBC };
+       CIPHER_AES192CTR, CIPHER_AES192CBC, CIPHER_BLOWFISHCBC, CIPHER_3DESCBC, CIPHER_AES256GCM, CIPHER_AES128GCM };
 
 /* One direction of the encrypted transport. */
 typedef struct {
@@ -73,6 +74,7 @@ typedef struct {
     aes_ctr_ctx     aes;
     blf_ctx         bf;         /* CIPHER_BLOWFISHCBC only */
     des3_ctx        des3;       /* CIPHER_3DESCBC only */
+    aes_gcm_ctx     gcm;        /* CIPHER_AES256GCM / CIPHER_AES128GCM only */
     chachapoly_ctx  cp;
     u8   mackey[64];
 } ssh_dir;

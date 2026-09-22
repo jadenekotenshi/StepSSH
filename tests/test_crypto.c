@@ -12,6 +12,7 @@
 #include "../core/wire.h"
 #include "../core/blowfish.h"
 #include "../core/des.h"
+#include "../core/gcm.h"
 #include "../core/bcrypt.h"
 #include "../core/ssh_key.h"
 #include <stdio.h>
@@ -356,6 +357,50 @@ static void test_des(void)
         des3_cbc_encrypt_chain(&c, iv, des3_plain + 16, buf + 16, des3_plain_LEN - 16);
         CHECK_MEM(buf, des3_cbc_exp, des3_plain_LEN, "3des-cbc encrypt, split across calls");
     }
+}
+
+static void test_aes_gcm(void)
+{
+    /* against OpenSSL's independent EVP AES-GCM, called directly (see tools/gen_vectors.py --
+     * the `openssl enc` CLI has no usable AEAD/tag support). Each length case re-derives its own
+     * fresh context from the same key/iv: aes_gcm_ctx auto-advances its invocation counter on
+     * every seal/open call (RFC 5647), and the oracle's vectors were each generated standalone. */
+    int t;
+    for (t = 0; t < 2; t++) {
+        const u8 *key = t == 0 ? gcm128_key : gcm256_key;
+        int keylen = t == 0 ? gcm128_key_LEN : gcm256_key_LEN;
+        const u8 *iv = t == 0 ? gcm128_iv : gcm256_iv;
+        int i;
+        for (i = 0; i < N_GCM; i++) {
+            size_t n = (size_t)gcm_lens[i];
+            u8 pkt[4 + 300 + GCM_TAGLEN], sealed[4 + 300 + GCM_TAGLEN], opened[4 + 300 + GCM_TAGLEN];
+            const u8 *ct_exp = t == 0 ? gcm128_ct_exp[i] : gcm256_ct_exp[i];
+            const u8 *tag_exp = t == 0 ? gcm128_tag_exp[i] : gcm256_tag_exp[i];
+            aes_gcm_ctx c;
+
+            STORE32_BE(pkt, (u32)n);
+            memcpy(pkt + 4, gcm_plain, n);
+            aes_gcm_init(&c, key, keylen, iv);
+            aes_gcm_seal(&c, sealed, pkt, n);
+            CHECK_MEM(sealed + 4, ct_exp, n, "aes-gcm ciphertext");
+            CHECK_MEM(sealed + 4 + n, tag_exp, GCM_TAGLEN, "aes-gcm tag");
+
+            aes_gcm_init(&c, key, keylen, iv);
+            CHECK(aes_gcm_open(&c, opened, sealed, n) == 0);
+            CHECK_MEM(opened + 4, gcm_plain, n, "aes-gcm decrypt");
+
+            /* a corrupted tag must be rejected, and must not be treated as if it decrypted */
+            aes_gcm_init(&c, key, keylen, iv);
+            sealed[4 + n] ^= 0x01;
+            CHECK(aes_gcm_open(&c, opened, sealed, n) != 0);
+            sealed[4 + n] ^= 0x01;
+        }
+    }
+    /* Note: the GCM specification's own published all-zero example (McGrew & Viega, Test Case 2)
+     * uses zero-length AAD, which aes_gcm_seal() has no way to reproduce -- SSH's framing always
+     * treats the 4-byte length field as AAD (RFC 5647 s.7.3), never empty. That vector was instead
+     * used as a sanity check on tools/gen_vectors.py's oracle wrapper itself (see its assert),
+     * before trusting that oracle to grade the SSH-shaped vectors checked above. */
 }
 
 static int read_file(const char *path, char *buf, size_t cap)
@@ -744,7 +789,7 @@ static void test_rng(void)
 int main(void)
 {
     test_sha(); test_hmac(); test_sha1(); test_knownhosts(); test_aes(); test_aes_blocks(); test_cbc_chain();
-    test_blowfish(); test_des(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
+    test_blowfish(); test_des(); test_aes_gcm(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
  test_chacha();
     test_x25519(); test_ed25519(); test_rng();
     test_keygen();                       /* after test_rng: that test needs an unseeded pool */

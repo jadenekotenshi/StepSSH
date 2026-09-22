@@ -184,9 +184,11 @@ else
 fi
 
 echo "== cipher x MAC matrix"
-for c in chacha20-poly1305@openssh.com aes256-ctr aes128-ctr; do
+for c in chacha20-poly1305@openssh.com aes256-gcm@openssh.com aes128-gcm@openssh.com aes256-ctr aes128-ctr; do
   for m in hmac-sha2-256-etm@openssh.com hmac-sha2-512-etm@openssh.com hmac-sha2-256 hmac-sha2-512; do
-    [ "$c" = chacha20-poly1305@openssh.com ] && [ "$m" != hmac-sha2-256-etm@openssh.com ] && continue
+    # AEAD ciphers (chacha20-poly1305, AES-GCM) authenticate themselves and negotiate no separate
+    # MAC; run each such cipher once, with whatever MAC the CLI still requires as a syntax formality.
+    case "$c" in chacha20-poly1305@openssh.com|*-gcm@openssh.com) [ "$m" != hmac-sha2-256-etm@openssh.com ] && continue ;; esac
     out=$(run -v -c "$c" -m "$m" -e 'echo matrix-ok' 2>&1)
     if echo "$out" | grep -q "matrix-ok" && echo "$out" | grep -q "cipher=$c"; then ok "$c / $m"; else bad "$c / $m" "$(echo "$out" | tail -2)"; fi
   done
@@ -194,13 +196,13 @@ done
 
 echo "== bulk data with server-initiated re-keying (RekeyLimit 256K)"
 want=$(seq 1 400000 | cksum)
-for c in chacha20-poly1305@openssh.com aes256-ctr; do
+for c in chacha20-poly1305@openssh.com aes256-gcm@openssh.com aes256-ctr; do
   got=$(run -c $c -e 'seq 1 400000' | cksum)
   [ "$got" = "$want" ] && ok "download 2.6MB intact ($c)" || bad "download ($c)" "want $want got $got"
 done
 dd if=/dev/urandom of="$T/blob" bs=1024 count=3000 2>/dev/null
 want=$(cksum < "$T/blob")
-for c in chacha20-poly1305@openssh.com aes128-ctr; do
+for c in chacha20-poly1305@openssh.com aes128-gcm@openssh.com aes128-ctr; do
   got=$(run -c $c -e 'cksum' < "$T/blob")
   [ "$got" = "$want" ] && ok "upload 3MB intact ($c)" || bad "upload ($c)" "want $want got $got"
 done

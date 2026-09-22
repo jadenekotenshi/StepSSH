@@ -11,7 +11,7 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Terminal | VT100/xterm subset, 256 colours, scrollback, alternate screen (vi, less, tmux), copy/paste, function keys, mouse reporting (click and drag -- for vim, tmux and the like; not the wheel, see Mouse reporting below) |
 | Key exchange | curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group-exchange-sha256, group16-sha512, group14-sha256, group14-sha1 (last resort) |
 | Host keys | ssh-ed25519, ecdsa-sha2-nistp256/384/521, RSA (rsa-sha2-512, rsa-sha2-256, and legacy SHA-1 ssh-rsa) |
-| Ciphers / MACs | chacha20-poly1305, aes256/192/128-ctr; hmac-sha2-256/512 (+etm), hmac-sha1 (+etm); **legacy, chosen only if nothing better is offered:** aes256/192/128-cbc, blowfish-cbc, 3des-cbc, hmac-sha1-96, hmac-md5, hmac-md5-96 (+etm variants) |
+| Ciphers / MACs | chacha20-poly1305, aes256/128-gcm, aes256/192/128-ctr; hmac-sha2-256/512 (+etm), hmac-sha1 (+etm); **legacy, chosen only if nothing better is offered:** aes256/192/128-cbc, blowfish-cbc, 3des-cbc, hmac-sha1-96, hmac-md5, hmac-md5-96 (+etm variants) |
 | Login | password, keyboard-interactive, public key: **ed25519, RSA, ECDSA**, plain or passphrase-protected; OpenSSH format and traditional PEM (PKCS#1, SEC1, PKCS#8) |
 | Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), drag files/folders from Workspace's File Viewer onto the browser to upload, new folder, rename, delete |
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
@@ -30,13 +30,13 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
 **Verified on the development Mac** (all also clean under AddressSanitizer + UBSan):
 
-- `make test` &mdash; 1573 checks: crypto against independent references (Python, `openssl`, RFC/FIPS
-  vectors), big-integer arithmetic against Python's own integers, elliptic curves against OpenSSL
-  signatures and ECDH secrets, RSA signatures **byte-identical** to OpenSSL's, every key type and file
-  format that `ssh-keygen` produces, the SFTP engine against an in-memory fake server (short reads,
-  fragmented delivery, injected failures, cancellation, connection loss, hostile input), and the
-  terminal emulator including a fuzz test.
-- `make interop` &mdash; 108 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
+- `make test` &mdash; 1663 checks: crypto against independent references (Python, `openssl`, OpenSSL's
+  own EVP API for AES-GCM, RFC/FIPS vectors), big-integer arithmetic against Python's own integers,
+  elliptic curves against OpenSSL signatures and ECDH secrets, RSA signatures **byte-identical** to
+  OpenSSL's, every key type and file format that `ssh-keygen` produces, the SFTP engine against an
+  in-memory fake server (short reads, fragmented delivery, injected failures, cancellation, connection
+  loss, hostile input), and the terminal emulator including a fuzz test.
+- `make interop` &mdash; 112 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
   exchange method; RSA/ECDSA/ed25519 login keys and host keys; encrypted keys; keys written by the
   app's own generator (read back by the real `ssh-keygen`); 3 MB and 20 MB transfers in both
   directions through **dozens of re-keys** (including Diffie-Hellman and CBC re-keys mid-transfer);
@@ -286,7 +286,7 @@ worse experience than the existing Download button and panel.
 
 ```
 core/   SSH engine. Pure C89, no I/O: feed it bytes, drain its output and events.
-  sha1 sha2 md5 hmac aes chacha nacl blowfish des bcrypt   primitives
+  sha1 sha2 md5 hmac aes gcm chacha nacl blowfish des bcrypt   primitives
   bignum ecc rsa                                       big integers, NIST curves, RSA PKCS#1
   rng                                                  entropy pool (see below)
   wire                                                 buffers, SSH wire format, base64
@@ -319,10 +319,11 @@ The engines are *sans-I/O* on purpose: the same code is driven by a blocking `se
 - **Passwords and passphrases** are never stored; they are typed into a custom field
   (`SecretField`) and wiped after use.
 - **Not constant-time.** The big-integer code (RSA private operations, ECDSA scalar multiplication,
-  Diffie-Hellman) and the byte-oriented AES are not hardened against timing or cache attacks, and RSA
-  signing is not blinded (it does verify its own result before releasing it, which defeats fault
-  attacks). That is acceptable for a single-user client on an isolated retro machine; it would not be
-  for a shared server. ChaCha20-Poly1305 and ed25519 are constant-time in their design.
+  Diffie-Hellman), the byte-oriented AES, and AES-GCM's GHASH (a bit-at-a-time GF(2^128) multiply)
+  are not hardened against timing or cache attacks, and RSA signing is not blinded (it does verify
+  its own result before releasing it, which defeats fault attacks). That is acceptable for a
+  single-user client on an isolated retro machine; it would not be for a shared server.
+  ChaCha20-Poly1305 and ed25519 are constant-time in their design.
 - **ECDSA nonces** are hedged: derived from fresh randomness *and* the private key *and* the message.
 - **Legacy algorithms** (CBC, blowfish-cbc, 3des-cbc, hmac-sha1, hmac-md5 and their truncated "-96"
   variants, SHA-1 signatures, group14-sha1) are offered last, so a server that supports anything
@@ -346,7 +347,9 @@ The engines are *sans-I/O* on purpose: the same code is driven by a blocking `se
 python3 tools/gen_tables.py core       # SHA-2/MD5/AES/Blowfish/curve/DH constants, derived and verified
 python3 tools/gen_nsenc.py             # NeXTSTEP encoding, from tools/NEXTSTEP.TXT
 python3 tools/gen_icon.py              # app/SecureShell.tiff, in the layout NeXT's Edit.app uses
-python3 tools/gen_vectors.py           # tests/vectors.h (independent reference implementations)
+python3 tools/gen_vectors.py           # tests/vectors.h (independent reference implementations;
+                                        # AES-GCM vectors need libcrypto reachable via ctypes --
+                                        # `openssl enc` has no usable AEAD/tag support to shell out to)
 python3 tools/gen_bn_vectors.py        # big-integer vectors from Python's integers
 python3 tools/gen_ec_vectors.py        # curve vectors from OpenSSL
 python3 tools/gen_rsa_vectors.py       # RSA vectors from OpenSSL

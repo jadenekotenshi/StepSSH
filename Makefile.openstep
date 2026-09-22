@@ -22,7 +22,7 @@ ICONHDR   = app/SecureShell.iconheader
 ICONTIFF  = app/SecureShell.tiff
 ICONFLAGS = -sectcreate __ICON __header $(ICONHDR) -segprot __ICON r r -sectcreate __ICON app $(ICONTIFF)
 
-CORE_OBJS = core/aes.o core/bcrypt.o core/bignum.o core/blowfish.o core/chacha.o core/des.o core/ecc.o core/hmac.o \
+CORE_OBJS = core/aes.o core/bcrypt.o core/bignum.o core/blowfish.o core/chacha.o core/des.o core/ecc.o core/gcm.o core/hmac.o \
             core/knownhosts.o core/md5.o core/nacl.o core/rng.o core/rsa.o core/sftp.o core/sha1.o core/sha2.o core/ssh.o core/ssh_auth.o \
             core/ssh_chan.o core/ssh_key.o core/wire.o
 TERM_OBJS = term/nsenc.o term/vt.o

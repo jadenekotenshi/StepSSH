@@ -42,7 +42,8 @@ static const char DEF_KEX[] =
 static const char DEF_HOSTKEY[] =
     "ssh-ed25519,ecdsa-sha2-nistp256,ecdsa-sha2-nistp384,ecdsa-sha2-nistp521,rsa-sha2-512,rsa-sha2-256,ssh-rsa";
 static const char DEF_CIPHERS[] =
-    "chacha20-poly1305@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr,"
+    "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,"
+    "aes256-ctr,aes192-ctr,aes128-ctr,"
     "aes256-cbc,aes192-cbc,aes128-cbc,blowfish-cbc,3des-cbc";
 static const char DEF_MACS[] =
     "hmac-sha2-256-etm@openssh.com,hmac-sha2-512-etm@openssh.com,hmac-sha1-etm@openssh.com,"
@@ -57,6 +58,8 @@ static const char DEF_MACS[] =
 #define DH_XBITS 256
 static const struct { const char *name; int id; int keylen, ivlen; } CIPHERS[] = {
     { "chacha20-poly1305@openssh.com", CIPHER_CHACHAPOLY, 64, 0  },
+    { "aes256-gcm@openssh.com",        CIPHER_AES256GCM,  32, 12 },
+    { "aes128-gcm@openssh.com",        CIPHER_AES128GCM,  16, 12 },
     { "aes256-ctr",                    CIPHER_AES256CTR,  32, 16 },
     { "aes192-ctr",                    CIPHER_AES192CTR,  24, 16 },
     { "aes128-ctr",                    CIPHER_AES128CTR,  16, 16 },
@@ -67,6 +70,17 @@ static const struct { const char *name; int id; int keylen, ivlen; } CIPHERS[] =
     { "3des-cbc",                      CIPHER_3DESCBC,     24, 8  },   /* legacy: last resort */
 };
 #define N_CIPHERS ((int)(sizeof(CIPHERS) / sizeof(CIPHERS[0])))
+
+/* AEAD ciphers (chacha20-poly1305, AES-GCM) authenticate the packet themselves: no separate MAC is
+ * negotiated or applied, and (unlike every block cipher above) their length field is cleartext. */
+static int cipher_is_aead(int id)
+{
+    return id == CIPHER_CHACHAPOLY || id == CIPHER_AES256GCM || id == CIPHER_AES128GCM;
+}
+static int cipher_is_gcm(int id)
+{
+    return id == CIPHER_AES256GCM || id == CIPHER_AES128GCM;
+}
 
 /* len is the MAC tag appended to each packet; keylen is the HMAC key length, always the underlying
  * hash's natural output size even where len is shorter (the "-96" variants: RFC 4253's hmac-sha1-96
@@ -261,7 +275,7 @@ const char *ssh_kex_name(const ssh_session *s)
 const char *ssh_mac_name(const ssh_session *s)
 {
     if (!s->first_kex_done) return "none";
-    if (CIPHERS[s->cipher_c2s].id == CIPHER_CHACHAPOLY) return "(implicit)";
+    if (cipher_is_aead(CIPHERS[s->cipher_c2s].id)) return "(implicit)";
     return MACS[s->mac_c2s].name;
 }
 
@@ -312,8 +326,12 @@ static void mac_calc(const ssh_dir *d, u32 seq, const u8 *data, size_t n, u8 *ou
 static int send_packet_now(ssh_session *s, const u8 *payload, size_t plen)
 {
     ssh_dir *d = &s->tx;
-    int aead = d->cipher == CIPHER_CHACHAPOLY;
-    size_t block = (d->cipher == CIPHER_NONE || aead) ? 8 : (size_t)d->block;
+    int aead_chacha = d->cipher == CIPHER_CHACHAPOLY;
+    int aead_gcm = cipher_is_gcm(d->cipher);
+    int aead = aead_chacha || aead_gcm;
+    /* chacha20-poly1305 always aligns to 8 regardless of d->block (unused/0 for it); AES-GCM
+     * aligns to the AES block size like any other AES mode, via d->block (set to 16). */
+    size_t block = (d->cipher == CIPHER_NONE || aead_chacha) ? 8 : (size_t)d->block;
     int excl = aead || d->etm;              /* length field not covered by alignment */
     size_t body = 1 + plen, pad, pktlen, total;
     u8 *pkt;
@@ -322,7 +340,7 @@ static int send_packet_now(ssh_session *s, const u8 *payload, size_t plen)
     if (pad < 4) pad += block;
     pktlen = body + pad;
     if (pktlen > SSH_MAX_PACKET) { ssh_fail(s, "outgoing packet too large"); return -1; }
-    total = 4 + pktlen + (aead ? CHACHAPOLY_TAGLEN : (size_t)d->maclen);
+    total = 4 + pktlen + (aead_chacha ? CHACHAPOLY_TAGLEN : aead_gcm ? GCM_TAGLEN : (size_t)d->maclen);
     if (sb_reserve(&s->out, total) < 0) { ssh_fail(s, "out of memory"); return -1; }
 
     pkt = s->out.p + s->out.len;
@@ -331,8 +349,10 @@ static int send_packet_now(ssh_session *s, const u8 *payload, size_t plen)
     memcpy(pkt + 5, payload, plen);
     if (ssh_rng_bytes(pkt + 5 + plen, pad) < 0) memset(pkt + 5 + plen, 0, pad);
 
-    if (aead) {
+    if (aead_chacha) {
         chachapoly_seal(&d->cp, s->tx_seq, pkt, pkt, pktlen);
+    } else if (aead_gcm) {
+        aes_gcm_seal(&d->gcm, pkt, pkt, pktlen);
     } else if (d->cipher != CIPHER_NONE && d->etm) {
         blk_enc(d, pkt + 4, pktlen);
         mac_calc(d, s->tx_seq, pkt, 4 + pktlen, pkt + 4 + pktlen);
@@ -436,6 +456,17 @@ static int read_packet(ssh_session *s, const u8 **payload, size_t *plen)
         total = 4 + pktlen + CHACHAPOLY_TAGLEN;
         if (avail < total) return 0;
         if (chachapoly_open(&d->cp, s->rx_seq, p, p, pktlen) != 0) { ssh_fail(s, "message authentication failed"); return -1; }
+    } else if (cipher_is_gcm(d->cipher)) {
+        /* AES-GCM's length field is cleartext (RFC 5647 s.7.3, like etm below) and used directly
+         * as GCM's associated data -- no separate decrypt-to-peek step the way chacha needs. Same
+         * per-cipher minimum reasoning as the etm branch below: the true floor is d->block (16 for
+         * AES), not a fixed constant. */
+        if (avail < 4) return 0;
+        pktlen = LOAD32_BE(p);
+        if (pktlen < (size_t)d->block || pktlen > SSH_MAX_PACKET || (pktlen % (size_t)d->block)) { ssh_fail(s, "bad packet length"); return -1; }
+        total = 4 + pktlen + GCM_TAGLEN;
+        if (avail < total) return 0;
+        if (aes_gcm_open(&d->gcm, p, p, pktlen) != 0) { ssh_fail(s, "message authentication failed"); return -1; }
     } else if (d->etm) {
         u8 mac[64];
         if (avail < 4) return 0;
@@ -787,12 +818,12 @@ static int handle_kexinit(ssh_session *s, const u8 *pl, size_t len)
         }
     }
     if (!errmsg[0]) {
-        if (CIPHERS[s->cipher_c2s].id != CIPHER_CHACHAPOLY) {
+        if (!cipher_is_aead(CIPHERS[s->cipher_c2s].id)) {
             if (negotiate(macs, lst[4], ll[4], name, sizeof(name)) < 0 || (mi = find_mac(name)) < 0)
                 strcpy(errmsg, "no matching MAC (client->server)");
             else s->mac_c2s = mi;
         }
-        if (!errmsg[0] && CIPHERS[s->cipher_s2c].id != CIPHER_CHACHAPOLY) {
+        if (!errmsg[0] && !cipher_is_aead(CIPHERS[s->cipher_s2c].id)) {
             if (negotiate(macs, lst[5], ll[5], name, sizeof(name)) < 0 || (mi = find_mac(name)) < 0)
                 strcpy(errmsg, "no matching MAC (server->client)");
             else s->mac_s2c = mi;
@@ -886,6 +917,11 @@ static void setup_dir(ssh_dir *d, int cidx, int midx, const u8 *iv, const u8 *ke
     d->cipher = CIPHERS[cidx].id;
     if (d->cipher == CIPHER_CHACHAPOLY) {
         chachapoly_init(&d->cp, key);
+        return;                                    /* AEAD: no separate MAC to set up */
+    }
+    if (cipher_is_gcm(d->cipher)) {
+        aes_gcm_init(&d->gcm, key, CIPHERS[cidx].keylen, iv);
+        d->block = 16;
         return;                                    /* AEAD: no separate MAC to set up */
     }
     if (d->cipher == CIPHER_BLOWFISHCBC) {
