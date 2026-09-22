@@ -94,9 +94,14 @@ has `/` as its home directory on Unix -- nothing to do with Workspace or this ap
 `getenv("HOME")` and `NSUserName()` stay logged at startup regardless, since they're cheap and worth having
 if account setup ever changes.
 
+**Also confirmed on OPENSTEP since:** recursive folder upload and download; dragging files/folders from
+Workspace's File Viewer onto the SFTP browser to upload them (see Drag-and-drop below); and local port
+forwarding (see Port forwarding below).
+
 **Not yet reported on OPENSTEP:** rename, delete, new folder, `NSSavePanel`/`NSOpenPanel` behaviour,
-recursive folder upload/download (new; only tested against a real server on the Mac so far -- see
-`make session-smoke`), window resizing, and recovery from a dropped connection.
+window resizing, recovery from a dropped connection, and mouse reporting (which only reached a clean
+*build* on OPENSTEP after a couple of rounds of fixes -- see its own section below -- and has not been
+tried yet).
 
 ## Getting it into the VM
 
@@ -196,6 +201,10 @@ Only the C core is sensitive to this; the Objective-C app is limited by the disp
 
 ## Port forwarding
 
+**Confirmed working on OPENSTEP 4.2**, after two build fixes along the way (a missing `O_NONBLOCK`
+fallback and an undeclared `fcntl()` prototype in the new file -- both already-known OPENSTEP quirks
+this project had solved once before in `SSHSession.m`, just not carried over; see the commit history).
+
 *Connection > Port Forwarding...*, available once connected, opens a small window listing this
 connection's forwarding rules: a local port, and the host:port on the other side of the connection
 that port relays to (`ssh -L localport:host:port`). *Add...* asks for the three, binds the local port
@@ -248,11 +257,19 @@ hand-computed expected bytes.
 
 ## Drag-and-drop
 
+**Confirmed working on OPENSTEP 4.2**, after one build fix (see below).
+
 Drag files or folders from Workspace's File Viewer onto the SFTP browser's file listing to upload them
 into whatever directory it currently shows -- folders go through the same recursive upload as the
 Upload panel. This uses `registerForDraggedTypes:` and the `NSDraggingDestination` informal protocol
 on the table view, which are original OpenStep API present since NeXTSTEP; the drop is rejected (the
 "no" cursor) while the browser isn't connected.
+
+The drag-destination return type (`SFTPBrowser.m`'s `SFTPTableView`) needed a fix to build at all: the
+type name `NSDragOperation` is not declared on this OPENSTEP install, even though the
+`NSDragOperationNone`/`Copy` constants it returns are (plain integers, not typedef'd). `app/Compat.h`
+now has `SSDragOp`, `unsigned int` under OPENSTEP and the real `NSDragOperation` on the host, used
+instead of naming the type directly.
 
 Dragging files *out* of the browser to download them is not implemented, and can't be done the way a
 modern Cocoa app would: that relies on "promised" files (declare the drag immediately, supply the actual
