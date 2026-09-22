@@ -4,7 +4,11 @@
 #   make -f Makefile.openstep          # build StepSSH.app
 #   make -f Makefile.openstep tools    # build stepssh/stepssh-keygen/stepscp (build/, no AppKit)
 #   make -f Makefile.openstep install  # the above into /LocalApps and /usr/local/bin (see below)
+#   make -f Makefile.openstep pkg      # StepSSH.pkg for Installer.app (see below; UNVERIFIED)
 #   make -f Makefile.openstep fat      # StepSSH.app as an i386+m68k+sparc fat binary (see below)
+#   make -f Makefile.openstep fat-tools    # stepssh/stepssh-keygen/stepscp, fat, same arch set
+#   make -f Makefile.openstep install-fat  # fat app + fat tools into /LocalApps, /usr/local/bin
+#   make -f Makefile.openstep pkg-fat      # StepSSH.pkg with the fat app + fat tools
 #   make -f Makefile.openstep clean
 #
 # No GNU-make features are used (no wildcard, no pattern rules) so the stock
@@ -17,6 +21,8 @@ ARCHS    =                        # e.g. -arch i386 -arch m68k -arch sparc; see 
 CFLAGS   = $(OPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 LIBS     = -framework AppKit -framework Foundation
 APP      = StepSSH.app
+# Keep in step with core/ssh.c's CLIENT_VERSION.
+VERSION  = 0.2.0
 
 # Workspace takes an application's icon (and its file-type table) from a read-only __ICON segment
 # linked into the executable, not from a file in the .app folder (compare /NextApps/Edit.app, whose
@@ -146,6 +152,55 @@ install: all tools
 	cp -r $(APP) $(APPDIR)/
 	@echo "installed: $(BINDIR)/stepssh, $(BINDIR)/stepssh-keygen, $(BINDIR)/stepscp, $(APPDIR)/$(APP)"
 
+# ---- Installer package (.pkg) ----
+# NeXT/OPENSTEP's own Installer.app (/NextAdmin) reads a package as a directory named "<Name>.pkg"
+# holding an "<Name>.info" metadata file (old-style NeXT property list: "{ Key = value; ... }") plus
+# the payload laid out as an actual directory tree alongside it, and optionally a "<Name>.bom"
+# bill-of-materials -- built by mkbom(1) if present, the direct ancestor of the .bom format modern
+# macOS installer packages still use.
+#
+#   make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools, for Installer.app
+#   make -f Makefile.openstep pkg-fat      # same, but the app + tools are i386+m68k+sparc fat
+#
+# UNVERIFIED: assembled from documentation/memory of the NEXTSTEP/OPENSTEP Installer package
+# format, not yet tested against a real Installer.app on real hardware -- unlike the header-gap
+# fixes elsewhere in this codebase, there was no way to check the exact .info fields or mkbom's
+# invocation against the real machine before writing this. If Installer.app rejects it, or mkbom
+# doesn't exist/take these arguments, report back exactly what happened (or what `man package`/
+# `man mkbom` say) so this can be corrected against the real thing instead of a guess.
+PKG     = StepSSH.pkg
+PKGROOT = pkgroot
+
+pkg-assemble:
+	rm -rf $(PKG) $(PKGROOT)
+	mkdir $(PKGROOT)
+	mkdir $(PKGROOT)/LocalApps
+	cp -r $(APP) $(PKGROOT)/LocalApps/
+	mkdir $(PKGROOT)/usr
+	mkdir $(PKGROOT)/usr/local
+	mkdir $(PKGROOT)/usr/local/bin
+	cp build/stepssh build/stepssh-keygen build/stepscp $(PKGROOT)/usr/local/bin/
+	mkdir $(PKG)
+	cp -r $(PKGROOT)/LocalApps $(PKG)/LocalApps
+	cp -r $(PKGROOT)/usr $(PKG)/usr
+	echo '{' > $(PKG)/StepSSH.info
+	echo '    Title = "StepSSH";' >> $(PKG)/StepSSH.info
+	echo '    Version = "$(VERSION)";' >> $(PKG)/StepSSH.info
+	echo '    Description = "SSH-2 client, plus the stepssh/stepssh-keygen/stepscp command-line tools.";' >> $(PKG)/StepSSH.info
+	echo '    DefaultLocation = "/";' >> $(PKG)/StepSSH.info
+	echo '    Relocatable = NO;' >> $(PKG)/StepSSH.info
+	echo '}' >> $(PKG)/StepSSH.info
+	-mkbom $(PKGROOT) $(PKG)/StepSSH.bom
+	rm -rf $(PKGROOT)
+	@echo "built $(PKG) -- UNVERIFIED against a real Installer.app; see this target's own comment above"
+
+pkg: all tools pkg-assemble
+
+pkg-fat: clean
+	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS)"
+	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS)"
+	$(MAKE) -f Makefile.openstep pkg-assemble
+
 # ---- optional multi-architecture ("fat") build ----
 # NeXT's cc accepts several -arch flags in one invocation: each source is compiled once per
 # architecture and the per-arch object code is combined into one fat Mach-O file automatically,
@@ -157,6 +212,8 @@ install: all tools
 #
 #   make -f Makefile.openstep fat-check    # fast: does cc even accept these -arch flags here?
 #   make -f Makefile.openstep fat          # full: StepSSH.app as an i386+m68k+sparc fat binary
+#   make -f Makefile.openstep fat-tools    # stepssh/stepssh-keygen/stepscp, same fat treatment
+#   make -f Makefile.openstep install-fat  # fat app + fat tools into /LocalApps, /usr/local/bin
 #   make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different arch set
 #
 # UNVERIFIED beyond "it links and lipo reports the right slices": this codebase has so far only
@@ -179,6 +236,28 @@ fat: clean
 	@echo "== fat link done; architectures actually present in $(APP)/StepSSH: =="
 	lipo -info $(APP)/StepSSH
 
+# Same idea as `fat`, for the command-line tools instead of the app: `tools` already respects
+# $(ARCHS) (it flows in through $(CFLAGS)), it just needs a clean first so it isn't linking
+# against core/*.o left over from a previous thin build.
+fat-tools: clean
+	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS)"
+	@echo "== fat tools built; architectures actually present: =="
+	lipo -info build/stepssh build/stepssh-keygen build/stepscp
+
+# `fat` and `fat-tools` each do their own `clean` first, so chaining them as two prerequisites of
+# one target would have the second one's clean delete the first one's output before it gets
+# installed. One `clean`, then both sub-builds, avoids that.
+install-fat: clean
+	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS)"
+	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS)"
+	-mkdir /usr/local
+	-mkdir $(BINDIR)
+	cp build/stepssh build/stepssh-keygen build/stepscp $(BINDIR)/
+	-mkdir $(APPDIR)
+	rm -rf $(APPDIR)/$(APP)
+	cp -r $(APP) $(APPDIR)/
+	@echo "installed fat (i386+m68k+sparc) binaries: $(BINDIR)/stepssh, $(BINDIR)/stepssh-keygen, $(BINDIR)/stepscp, $(APPDIR)/$(APP)"
+
 clean:
 	rm -f core/*.o term/*.o app/*.o tools/*.o
-	rm -rf build $(APP)
+	rm -rf build $(APP) $(PKG) $(PKGROOT)

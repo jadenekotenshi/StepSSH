@@ -125,12 +125,51 @@ make -f Makefile.openstep test      # FIRST: the C core on the real compiler
 make -f Makefile.openstep           # builds StepSSH.app
 make -f Makefile.openstep tools     # builds stepssh, stepssh-keygen, stepscp
 make -f Makefile.openstep install   # the above into /LocalApps and /usr/local/bin (see below)
+make -f Makefile.openstep pkg       # StepSSH.pkg for Installer.app (see Packaging below)
 make -f Makefile.openstep bench     # how long RSA, bcrypt, Diffie-Hellman... take on this CPU
 ```
 
 Expect `crypto: 952`, `vt: 259`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79` &mdash; all "0 failed".
 (If the machine has no `/dev/urandom`, the RNG test prints a note that it is crediting synthetic
 entropy; that is expected.) `make` on OPENSTEP has no `mkdir -p`, so the makefile avoids it.
+
+### Packaging (.pkg for Installer.app)
+
+```sh
+make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools
+make -f Makefile.openstep pkg-fat      # StepSSH.pkg: i386+m68k+sparc fat app + tools
+```
+
+Assembles a `StepSSH.pkg` -- an `<Name>.info` metadata file plus the app and tools laid out under
+`/LocalApps` and `/usr/local/bin`, the directory structure NeXT/OPENSTEP's own Installer.app reads
+-- and runs `mkbom` over it for a `<Name>.bom` bill-of-materials, if `mkbom` is present.
+**UNVERIFIED**: assembled from documentation/memory of the Installer package format, not yet tested
+against a real Installer.app -- unlike the header-gap fixes elsewhere in this codebase, there was no
+real machine to check the exact `.info` fields or `mkbom`'s invocation against before writing this.
+If Installer.app rejects it, report back exactly what happened.
+
+### Fat (multi-architecture) binaries
+
+**Confirmed working on real OPENSTEP 4.2 hardware**: `StepSSH.app` builds and links as a genuine
+i386+m68k+sparc fat binary. NeXT's `cc` accepts several `-arch` flags in one invocation and
+combines the per-architecture object code into one fat Mach-O automatically -- this only works if
+the target architecture's compiler backend is actually installed (the m68k/sparc components were
+separate from a plain Intel install on some OPENSTEP CD sets).
+
+```sh
+make -f Makefile.openstep fat-check    # fast: does cc even accept these -arch flags here?
+make -f Makefile.openstep fat          # StepSSH.app as an i386+m68k+sparc fat binary
+make -f Makefile.openstep fat-tools    # stepssh/stepssh-keygen/stepscp, same fat treatment
+make -f Makefile.openstep install-fat  # both of the above into /LocalApps and /usr/local/bin
+make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different arch set
+```
+
+`fat`/`fat-tools`/`install-fat` all `clean` first, so a fat build never links against thin
+(single-architecture) object files left over from a previous plain build. UNVERIFIED beyond "it
+links and `lipo -info` reports the right slices": nothing here confirms the m68k or sparc slices
+actually *execute* -- `LOAD32_BE`/`STORE32_BE` etc. (`core/ssh_types.h`) mean the C core never
+assumes a byte order, but that is a design intent, not a proof, and the AppKit/Objective-C layer
+is untested on either architecture.
 
 Run the app from a Terminal to see its startup messages (they begin `StepSSH:`):
 
