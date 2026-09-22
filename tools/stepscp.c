@@ -21,8 +21,17 @@
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
-#include <dirent.h>
 #include <sys/types.h>
+/* OPENSTEP 4.2's <dirent.h> is a thin forwarder: it only pulls in the real DIR/struct dirent
+ * definitions (from <sys/dir.h>/<sys/dirent.h>) when the feature-test macro _POSIX_SOURCE is
+ * defined; without it, the header is effectively empty ("undefined type, found DIR" -- found on
+ * real hardware). Defined only around this one include, not for the whole file, since a
+ * feature-test macro can in principle change what *other* headers expose too, and the
+ * sys/socket.h/netinet/in.h networking code elsewhere in this file is already proven working
+ * without it -- no reason to risk changing that. */
+#define _POSIX_SOURCE 1
+#include <dirent.h>
+#undef _POSIX_SOURCE
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/time.h>
