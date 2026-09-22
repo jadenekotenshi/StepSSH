@@ -50,6 +50,23 @@ bench: $(BUILD)/bench
 $(BUILD)/sshc: tools/sshc.c $(CORE_OBJ)
 	$(CC) -std=gnu99 -Wall -O2 -g $(SANFLAGS) tools/sshc.c $(CORE_OBJ) -o $@
 
+# The user-facing CLI tools (unlike sshc/sftpc/mkkey above, meant only for testing on this host)
+# build with the same strict flags as core/ -- they also have to compile under Makefile.openstep's
+# gcc 2.7.2, and catching a C89 problem here is a much shorter iteration loop than the user's VM.
+$(BUILD)/clicommon.o: tools/clicommon.c tools/clicommon.h $(wildcard core/*.h) | $(BUILD)
+	$(CC) $(CFLAGS) -c tools/clicommon.c -o $@
+
+$(BUILD)/stepssh: tools/stepssh.c $(BUILD)/clicommon.o $(CORE_OBJ)
+	$(CC) $(CFLAGS) tools/stepssh.c $(BUILD)/clicommon.o $(CORE_OBJ) -o $@
+
+$(BUILD)/stepssh-keygen: tools/stepssh-keygen.c $(BUILD)/clicommon.o $(CORE_OBJ)
+	$(CC) $(CFLAGS) tools/stepssh-keygen.c $(BUILD)/clicommon.o $(CORE_OBJ) -o $@
+
+$(BUILD)/stepscp: tools/stepscp.c $(BUILD)/clicommon.o $(CORE_OBJ)
+	$(CC) $(CFLAGS) tools/stepscp.c $(BUILD)/clicommon.o $(CORE_OBJ) -o $@
+
+tools: $(BUILD)/stepssh $(BUILD)/stepssh-keygen $(BUILD)/stepscp
+
 $(BUILD)/test_bignum: tests/test_bignum.c tests/bn_vectors.h $(CORE_OBJ)
 	$(CC) $(CFLAGS) tests/test_bignum.c $(CORE_OBJ) -o $@
 
@@ -70,8 +87,10 @@ test: $(BUILD)/test_crypto $(BUILD)/test_vt $(BUILD)/test_sftp $(BUILD)/test_big
 	$(BUILD)/test_ecc
 	$(BUILD)/test_rsa
 
-interop: $(BUILD)/sshc $(BUILD)/mkkey $(BUILD)/sftpc
-	SSHC="$(CURDIR)/$(BUILD)/sshc" sh tests/interop.sh
+interop: $(BUILD)/sshc $(BUILD)/mkkey $(BUILD)/sftpc tools
+	SSHC="$(CURDIR)/$(BUILD)/sshc" STEPSSH="$(CURDIR)/$(BUILD)/stepssh" \
+	STEPSSH_KEYGEN="$(CURDIR)/$(BUILD)/stepssh-keygen" STEPSCP="$(CURDIR)/$(BUILD)/stepscp" \
+	sh tests/interop.sh
 
 lint:
 	sh tools/lint_openstep.sh
@@ -132,4 +151,4 @@ session-smoke:
 clean:
 	rm -rf build build-san
 
-.PHONY: all test interop lint check-objc ui-smoke session-smoke bench dist clean
+.PHONY: all test interop lint check-objc ui-smoke session-smoke bench dist clean tools

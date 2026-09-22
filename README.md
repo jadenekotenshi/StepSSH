@@ -17,6 +17,7 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
 | Safety | known_hosts checking (plain, wildcard, hashed), strict-KEX (Terrapin) mitigation, refuses to run on a weak RNG |
 | Forwarding | local port forwarding ("ssh -L"), any number of rules, managed from *Connection > Port Forwarding...* while connected |
+| Command line | `stepssh`, `stepssh-keygen`, `stepscp` -- OpenSSH-syntax-compatible CLI tools for scripts, alongside the GUI app; see Command-line tools below |
 
 **Not supported:** compression, *remote* port forwarding ("ssh -R") or dynamic/SOCKS forwarding ("ssh -D"
 -- see Port forwarding below), agent forwarding, X11, IPv6, middle-click (mouse reporting
@@ -36,11 +37,13 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
   OpenSSL's, every key type and file format that `ssh-keygen` produces, the SFTP engine against an
   in-memory fake server (short reads, fragmented delivery, injected failures, cancellation, connection
   loss, hostile input), and the terminal emulator including a fuzz test.
-- `make interop` &mdash; 112 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
+- `make interop` &mdash; 124 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
   exchange method; RSA/ECDSA/ed25519 login keys and host keys; encrypted keys; keys written by the
   app's own generator (read back by the real `ssh-keygen`); 3 MB and 20 MB transfers in both
   directions through **dozens of re-keys** (including Diffie-Hellman and CBC re-keys mid-transfer);
-  SFTP against the real `sftp-server` (3000-entry directories, error cases, cancel-then-reuse).
+  SFTP against the real `sftp-server` (3000-entry directories, error cases, cancel-then-reuse);
+  `stepssh`/`stepssh-keygen`/`stepscp` (exec, exit status, `-l`, refusing `-L`, key generation
+  cross-checked against the real `ssh-keygen`, single-file and recursive SFTP transfers).
 - `make session-smoke` &mdash; the real Objective-C `SSHSession` and file browser run against `sshd`
   (modern AppKit, PostScript calls stubbed): login, PTY, output, resize, browser open/close/reopen,
   upload/download byte-for-byte.
@@ -120,10 +123,11 @@ tar xf /Volumes/SSH/SSH.TAR
 ```sh
 make -f Makefile.openstep test      # FIRST: the C core on the real compiler
 make -f Makefile.openstep           # builds StepSSH.app
+make -f Makefile.openstep tools     # builds stepssh, stepssh-keygen, stepscp
 make -f Makefile.openstep bench     # how long RSA, bcrypt, Diffie-Hellman... take on this CPU
 ```
 
-Expect `crypto: 843`, `vt: 223`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79` &mdash; all "0 failed".
+Expect `crypto: 952`, `vt: 259`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79` &mdash; all "0 failed".
 (If the machine has no `/dev/urandom`, the RNG test prints a note that it is crediting synthetic
 entropy; that is expected.) `make` on OPENSTEP has no `mkdir -p`, so the makefile avoids it.
 
@@ -221,6 +225,44 @@ on purpose: a client should not silently let a server open connections through i
 would mean implementing a small SOCKS4/5 server. Both are plausible future additions on top of the same
 `direct-tcpip` machinery local forwarding already uses, just not attempted in this pass.
 
+## Command-line tools
+
+**Verified on the development Mac** (12 automated `make interop` checks against a real OpenSSH
+`sshd`, covering everything below); **not yet built or run on OPENSTEP hardware** -- unlike the
+app, nobody has reported back on these yet, so treat them as unverified there until that happens.
+
+Three tools live alongside `StepSSH.app`, for scripts and anyone who would rather type than click.
+Their real names are lowercase, matching how `ssh`/`ssh-keygen`/`scp` themselves are named even
+though "SSH" is written capitalised in prose -- `make -f Makefile.openstep tools` builds all three
+into `build/` (plain C, no AppKit, so `make tools` also works on the Mac for testing). Syntax
+follows OpenSSH's own tools wherever this engine has the matching capability; where it does not,
+the flag is refused with a one-line explanation rather than silently accepted and ignored -- accepting
+`-L` and then not forwarding anything would look far more like a bug than an error does.
+
+- **`stepssh [-p port] [-l login_name] [-i identity_file] [-c ciphers] [-m macs] [-o option] [-q]
+  [-v] [-t] [-T] [user@]hostname [command]`** -- an interactive shell (with a real pty, the local
+  terminal switched to raw mode so keystrokes reach the remote side untouched) if no command is
+  given, or a single exec otherwise, exactly like `ssh`. Authentication tries a key, then a
+  password, then keyboard-interactive, each prompted for on the terminal if not supplied
+  (`STEPSSH_PASSPHRASE` / `STEPSSH_PASSWORD` answer non-interactively for scripts). Host keys go
+  through `~/.ssh/known_hosts` with OpenSSH's own trust-on-first-use prompt and its loud refusal
+  of a *changed* key -- not the ad hoc fingerprint-pinning `sshc` (the dev-only test tool) uses.
+  `-L`/`-R`/`-D` (port forwarding -- local forwarding is in the GUI), `-A` (agent forwarding) and
+  `-X`/`-Y` (X11) are refused, not silently ignored; `-o` understands only `UserKnownHostsFile` and
+  `StrictHostKeyChecking`, and `-F` (a config *file*) is accepted but never read.
+- **`stepssh-keygen [-q] [-t ed25519] [-f output_keyfile] [-C comment] [-N new_passphrase]`** --
+  matches the app's own *Generate Key...*: ed25519 only (`-t` anything else is refused, not
+  silently downgraded), prompts for a path and a confirmed passphrase when not given on the command
+  line, and refuses to overwrite an existing file without confirmation.
+- **`stepscp [-r] [-p] [-P port] [-i identity_file] [-c ciphers] [-m macs] [-o option] [-q]
+  source target`** -- one source and one target, exactly one of them `[user@]host:path`; `-r`
+  copies a whole directory tree (unlike `cp -r`/real `scp -r`, the destination is always an exact
+  copy of the source, never nested a level deeper because a same-named destination already exists).
+  The wire protocol is SFTP, not the legacy scp/rcp protocol -- like modern OpenSSH's `scp` can be
+  told to do, and every OpenSSH `sshd` runs an `sftp-server`, so this is rarely a practical
+  difference. `-p` preserves the source file's permission bits, not its modification time (there is
+  no SFTP primitive for that exposed at the C API level yet).
+
 ## Mouse reporting
 
 **Confirmed working on OPENSTEP 4.2** (in `vim`), after a build fix (see below).
@@ -301,7 +343,9 @@ app/    Objective-C, all UI built in code (no nibs):
         TerminalView PromptPanel SecretField UIHelpers Compat.h main.m
         StepSSH.iconheader, StepSSH.tiff   the application icon (linked in as __ICON)
 tests/  unit tests, interop.sh, session/UI smoke tests, tests/keys/ (real ssh-keygen output)
-tools/  table/vector generators, sshc (CLI SSH), sftpc (CLI SFTP), mkkey, bench, lint
+tools/  stepssh, stepssh-keygen, stepscp (user-facing CLI tools -- see Command-line tools below)
+        + clicommon (shared by those three); table/vector generators, lint;
+        sshc/sftpc/mkkey/bench (dev-host-only test tools, not built for OPENSTEP)
 ```
 
 The engines are *sans-I/O* on purpose: the same code is driven by a blocking `select()` loop in

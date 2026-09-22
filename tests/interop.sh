@@ -47,6 +47,9 @@ HOSTFP=$(ssh-keygen -lf "$T/host.pub" | awk '{print $2}')
 SFTPC=${SFTPC:-$(dirname "$SSHC")/sftpc}
 sf() { "$SFTPC" -p $PORT -i "$T/user" "$ME@127.0.0.1" "$@"; }
 run() { "$SSHC" -p $PORT -i "$T/user" "$@" "$ME@127.0.0.1"; }
+STEPSSH=${STEPSSH:-$(dirname "$SSHC")/stepssh}
+STEPSSH_KEYGEN=${STEPSSH_KEYGEN:-$(dirname "$SSHC")/stepssh-keygen}
+STEPSCP=${STEPSCP:-$(dirname "$SSHC")/stepscp}
 
 echo "== basics"
 out=$(run -e 'echo hello') ; [ "$out" = "hello" ] && ok "exec echo" || bad "exec echo" "got: $out"
@@ -260,6 +263,44 @@ out=$(sf rmdir "$R/nonexistent" 2>&1); rc=$?; [ $rc -ne 0 ] && ok "rmdir of a mi
 out=$(SFTPC_CANCEL_AFTER=200000 sf get "$R/big.bin" "$T/part.bin" + ls "$R/sub" 2>&1)
 echo "$out" | head -1 | grep -qE "^cancelled after [0-9]+ bytes" && [ "$(stat -f %z "$T/part.bin" 2>/dev/null || stat -c %s "$T/part.bin")" -lt 20971520 ] && ok "a transfer can be cancelled mid-flight" || bad "cancel" "$out"
 echo "$out" | sed -n 2p | grep -q "" ; [ "$(echo "$out" | wc -l | tr -d ' ')" = "1" ] && ok "after a cancel the same connection still works (next command ran)" || bad "session after cancel" "$out"
+
+echo "== stepssh / stepssh-keygen / stepscp (OpenSSH-syntax-compatible CLI tools)"
+# StrictHostKeyChecking=no throughout: the interactive trust-on-first-use prompt (and the loud
+# refusal on a *changed* key) needs a real controlling terminal to test -- verified separately, by
+# hand, against a real pty (see the tool's own commit message); a plain pipe can't drive it, since
+# cli_confirm() deliberately refuses rather than reading a password prompt's answer off stdin.
+HOME_STEP="$T/step_home"; mkdir -p "$HOME_STEP/.ssh"
+runstep() { HOME="$HOME_STEP" "$STEPSSH" -p $PORT -i "$T/user" -o StrictHostKeyChecking=no "$ME@127.0.0.1" "$@"; }
+
+"$STEPSSH_KEYGEN" -q -f "$T/stepkey" -N "" -C "interop-test" >/dev/null
+[ -f "$T/stepkey" ] && [ -f "$T/stepkey.pub" ] && ok "stepssh-keygen writes a private and public key" || bad "stepssh-keygen: no output files"
+[ "$(stat -f %Lp "$T/stepkey" 2>/dev/null || stat -c %a "$T/stepkey")" = "600" ] && ok "stepssh-keygen: private key is mode 600" || bad "stepssh-keygen mode"
+want_fp=$(ssh-keygen -lf "$T/stepkey.pub" | awk '{print $2}')
+got_fp=$(ssh-keygen -y -f "$T/stepkey" | ssh-keygen -lf /dev/stdin | awk '{print $2}')
+[ "$want_fp" = "$got_fp" ] && ok "stepssh-keygen: private key matches its own .pub (real ssh-keygen agrees)" || bad "stepssh-keygen fingerprint mismatch" "$want_fp vs $got_fp"
+echo "no" | "$STEPSSH_KEYGEN" -f "$T/stepkey" -N "" >/dev/null 2>&1
+[ "$(ssh-keygen -y -f "$T/stepkey" 2>/dev/null)" = "$(cat "$T/stepkey.pub")" ] && ok "stepssh-keygen: declines to overwrite without confirmation" || bad "stepssh-keygen overwrite guard"
+
+out=$(runstep echo hello world); [ "$out" = "hello world" ] && ok "stepssh: exec, multi-word command joined like ssh's own argv" || bad "stepssh exec" "$out"
+runstep 'exit 42'; rc=$?; [ $rc -eq 42 ] && ok "stepssh: remote exit status propagates" || bad "stepssh exit status" "rc=$rc"
+HOME="$HOME_STEP" "$STEPSSH" -p $PORT -i "$T/user" -o StrictHostKeyChecking=no -l "$ME" 127.0.0.1 true >/dev/null 2>&1
+rc=$?; [ $rc -eq 0 ] && ok "stepssh: -l login_name accepted like ssh's own" || bad "stepssh -l" "rc=$rc"
+out=$(HOME="$HOME_STEP" "$STEPSSH" -p $PORT -i "$T/user" -o StrictHostKeyChecking=no -L 8080:localhost:80 "$ME@127.0.0.1" true 2>&1); rc=$?
+[ $rc -ne 0 ] && echo "$out" | grep -qi "not available" && ok "stepssh: -L is refused with an explanation, not silently ignored" || bad "stepssh -L" "rc=$rc $out"
+
+RS=$T/remote_step; mkdir "$RS"
+echo "a small file" > "$T/step_up.txt"
+"$STEPSCP" -P $PORT -i "$T/user" -o StrictHostKeyChecking=no "$T/step_up.txt" "$ME@127.0.0.1:$RS/up.txt" >/dev/null
+[ "$(cat "$RS/up.txt" 2>/dev/null)" = "a small file" ] && ok "stepscp: single-file upload" || bad "stepscp upload"
+"$STEPSCP" -P $PORT -i "$T/user" -o StrictHostKeyChecking=no "$ME@127.0.0.1:$RS/up.txt" "$T/step_down.txt" >/dev/null
+[ "$(cat "$T/step_down.txt" 2>/dev/null)" = "a small file" ] && ok "stepscp: single-file download" || bad "stepscp download"
+
+mkdir -p "$T/step_tree/sub"
+echo A > "$T/step_tree/a.txt"; echo B > "$T/step_tree/sub/b.txt"
+"$STEPSCP" -r -P $PORT -i "$T/user" -o StrictHostKeyChecking=no "$T/step_tree" "$ME@127.0.0.1:$RS/tree" >/dev/null
+[ "$(cat "$RS/tree/a.txt" 2>/dev/null)" = "A" ] && [ "$(cat "$RS/tree/sub/b.txt" 2>/dev/null)" = "B" ] && ok "stepscp: -r recursive upload, nested directory included" || bad "stepscp -r upload"
+"$STEPSCP" -r -P $PORT -i "$T/user" -o StrictHostKeyChecking=no "$ME@127.0.0.1:$RS/tree" "$T/step_tree_down" >/dev/null
+diff -r "$T/step_tree" "$T/step_tree_down" >/dev/null 2>&1 && ok "stepscp: -r recursive download round-trips byte-identical" || bad "stepscp -r download"
 
 echo
 echo "interop: $pass passed, $fail failed"

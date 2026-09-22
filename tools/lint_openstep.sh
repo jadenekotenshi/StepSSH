@@ -10,18 +10,21 @@ check() {   # description, extended-regex, files...
 }
 OBJC="app/*.m app/*.h"
 ALLSRC="core/*.c core/*.h term/*.c term/*.h app/*.m app/*.h"
+# tools/*.c that DO build on OPENSTEP (stepssh, stepssh-keygen, stepscp and their shared
+# clicommon), as opposed to the dev-host-only tools (sshc/sftpc/mkkey/bench/...).
+CLITOOLS="tools/clicommon.c tools/clicommon.h tools/stepssh.c tools/stepssh-keygen.c tools/stepscp.c"
 
 # --- language ---
-check "// comments (gcc 2.7.2 -ansi rejects them in C)"     '(^|[^:"])//[^"]*$'                   core/*.c core/*.h term/*.c term/*.h
+check "// comments (gcc 2.7.2 -ansi rejects them in C)"     '(^|[^:"])//[^"]*$'                   core/*.c core/*.h term/*.c term/*.h $CLITOOLS
 check "@property/@synthesize/@autoreleasepool"              '@(property|synthesize|autoreleasepool|try|catch|finally)' $OBJC
 check "blocks"                                              '\^[[:space:]]*\{|\^[[:space:]]*\([^)]*\)[[:space:]]*\{' $OBJC
 check "dot syntax on objects / literals"                    '@\[|@\{|@[0-9(]'                     $OBJC
 check "fast enumeration"                                    'for[[:space:]]*\([^;)]*[[:space:]]in[[:space:]]' $OBJC
 check "modern integer types (NSInteger/CGFloat/...)"        '\b(NSInteger|NSUInteger|CGFloat|CGRect|CGPoint|instancetype|nullable|__weak|__strong)\b' $OBJC
-check "stdint / stdbool / inline / restrict"                '#include[[:space:]]*<(stdint|stdbool|inttypes)\.h>|\binline\b|\brestrict\b' core/*.c core/*.h term/*.c term/*.h
+check "stdint / stdbool / inline / restrict"                '#include[[:space:]]*<(stdint|stdbool|inttypes)\.h>|\binline\b|\brestrict\b' core/*.c core/*.h term/*.c term/*.h $CLITOOLS
 check "CLOCKS_PER_SEC / CLK_TCK (not portable to OPENSTEP's libc: use gettimeofday)" '\b(CLOCKS_PER_SEC|CLK_TCK)\b' core/*.c core/*.h term/*.c app/*.m tools/bench.c
-check "declaration in for-init (C99)"                       'for[[:space:]]*\((int|unsigned|size_t|u8|u32)[[:space:]]+[a-z_]+[[:space:]]*=' core/*.c term/*.c tools/bench.c
-check "snprintf/vsnprintf (not guaranteed on 4.2)"          '\bv?snprintf\b'                      core/*.c term/*.c app/*.m
+check "declaration in for-init (C99)"                       'for[[:space:]]*\((int|unsigned|size_t|u8|u32)[[:space:]]+[a-z_]+[[:space:]]*=' core/*.c term/*.c tools/bench.c $CLITOOLS
+check "snprintf/vsnprintf (not guaranteed on 4.2)"          '\bv?snprintf\b'                      core/*.c term/*.c app/*.m $CLITOOLS
 
 # --- APIs added after OpenStep 4.2 ---
 check "NSString drawing (drawAtPoint:withAttributes:) -- use PSshow"   'drawAtPoint|drawInRect:.*withAttributes|sizeWithAttributes' $OBJC
@@ -52,6 +55,15 @@ grep -q "__ICON" Makefile.openstep || { echo "LINT: Makefile.openstep does not l
 for f in core/*.c term/*.c app/*.m; do
     o=$(echo "$f" | sed 's/\.[cm]$/.o/')
     grep -q "$o" Makefile.openstep || { echo "LINT: $f is not listed in Makefile.openstep (it would fail to link)"; status=1; }
+done
+# clicommon.c/.h build to tools/clicommon.o (like core/*.c); stepssh*/stepscp.c are compiled
+# straight from source in their own link line (like a test_*.c), so it is each .c name itself
+# that must appear, not a corresponding .o.
+for f in $CLITOOLS; do
+    case "$f" in
+    *.h) continue ;;
+    esac
+    grep -q "$(basename "$f")" Makefile.openstep || { echo "LINT: $f is not listed in Makefile.openstep (it would fail to link)"; status=1; }
 done
 
 # --- static tables of Objective-C string constants (old gcc may reject them) ---

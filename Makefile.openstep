@@ -2,6 +2,7 @@
 #
 #   make -f Makefile.openstep test     # FIRST: run the C unit tests on the real compiler
 #   make -f Makefile.openstep          # build StepSSH.app
+#   make -f Makefile.openstep tools    # build stepssh/stepssh-keygen/stepscp (build/, no AppKit)
 #   make -f Makefile.openstep fat      # StepSSH.app as an i386+m68k+sparc fat binary (see below)
 #   make -f Makefile.openstep clean
 #
@@ -102,6 +103,29 @@ test: build/test_crypto build/test_vt build/test_sftp build/test_bignum build/te
 	build/test_ecc
 	build/test_rsa
 
+# ---- ancillary command-line tools (stepssh, stepssh-keygen, stepscp) ----
+# Plain C, no AppKit: OpenSSH-syntax-compatible SSH/keygen/scp for shell scripts. See tools/*.c
+# and README.md's "Command-line tools" section for what each one supports.
+tools/clicommon.o: tools/clicommon.c tools/clicommon.h
+	$(CC) $(CFLAGS) -c tools/clicommon.c -o tools/clicommon.o
+
+build/stepssh: tools/stepssh.c tools/clicommon.o $(CORE_OBJS)
+	-mkdir build
+	@( cd build ) >/dev/null 2>&1 || { echo "make: build is missing or is not a directory:"; ls -ld build; echo "remove it and run make again"; exit 1; }
+	$(CC) $(CFLAGS) -o build/stepssh tools/stepssh.c tools/clicommon.o $(CORE_OBJS)
+
+build/stepssh-keygen: tools/stepssh-keygen.c tools/clicommon.o $(CORE_OBJS)
+	-mkdir build
+	@( cd build ) >/dev/null 2>&1 || { echo "make: build is missing or is not a directory:"; ls -ld build; echo "remove it and run make again"; exit 1; }
+	$(CC) $(CFLAGS) -o build/stepssh-keygen tools/stepssh-keygen.c tools/clicommon.o $(CORE_OBJS)
+
+build/stepscp: tools/stepscp.c tools/clicommon.o $(CORE_OBJS)
+	-mkdir build
+	@( cd build ) >/dev/null 2>&1 || { echo "make: build is missing or is not a directory:"; ls -ld build; echo "remove it and run make again"; exit 1; }
+	$(CC) $(CFLAGS) -o build/stepscp tools/stepscp.c tools/clicommon.o $(CORE_OBJS)
+
+tools: build/stepssh build/stepssh-keygen build/stepscp
+
 # ---- optional multi-architecture ("fat") build ----
 # NeXT's cc accepts several -arch flags in one invocation: each source is compiled once per
 # architecture and the per-arch object code is combined into one fat Mach-O file automatically,
@@ -136,5 +160,5 @@ fat: clean
 	lipo -info $(APP)/StepSSH
 
 clean:
-	rm -f core/*.o term/*.o app/*.o
+	rm -f core/*.o term/*.o app/*.o tools/*.o
 	rm -rf build $(APP)
