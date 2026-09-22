@@ -80,8 +80,28 @@ Run the app from a Terminal to see its startup messages (they begin `SecureShell
 ./SecureShell.app/SecureShell
 ```
 
-If a launch from Workspace does nothing but the Terminal launch works, the problem is the `.app`
-folder layout, not the code.
+### Launching from Workspace
+
+`SecureShell.app` is deliberately just a folder holding the executable: that is all NeXT's own
+`Edit.app` has (apart from its language folders). What Workspace does *not* find in the folder is the
+icon: NeXT links the application icon and file-type table into the executable, as a read-only
+`__ICON` segment, using `app/SecureShell.iconheader` and `app/SecureShell.tiff`. `Makefile.openstep`
+does the same (`-sectcreate __ICON ...`; if your `cc` rejects those flags it says so and links without
+an icon). To see what was linked in:
+
+```sh
+make -f Makefile.openstep iconcheck      # expect: segname __ICON, sections __header and app
+```
+
+If double-clicking still does nothing, find out how far the launch got. Workspace throws away the
+application's stderr, so the startup messages can also go to a file, which is used only if it exists:
+
+```sh
+touch ~/.SecureShell.trace               # then launch from Workspace
+cat ~/.SecureShell.trace                 # argv, working directory, and each startup step reached
+```
+
+(`open` behaves like Workspace. `rm ~/.SecureShell.trace` turns tracing off again.)
 
 ### Things still worth watching on OPENSTEP (marked `[V]` in `app/Compat.h`)
 
@@ -130,6 +150,7 @@ term/   vt.c (terminal emulator core), nsenc.c (NeXTSTEP <-> Unicode)
 app/    Objective-C, all UI built in code (no nibs):
         AppController ConnectController KeyGenController SSHSession SFTPBrowser
         TerminalView PromptPanel SecretField UIHelpers Compat.h main.m
+        SecureShell.iconheader, SecureShell.tiff   the application icon (linked in as __ICON)
 tests/  unit tests, interop.sh, session/UI smoke tests, tests/keys/ (real ssh-keygen output)
 tools/  table/vector generators, sshc (CLI SSH), sftpc (CLI SFTP), mkkey, bench, lint
 ```
@@ -164,6 +185,7 @@ The engines are *sans-I/O* on purpose: the same code is driven by a blocking `se
 ```sh
 python3 tools/gen_tables.py core       # SHA-2/MD5/AES/Blowfish/curve/DH constants, derived and verified
 python3 tools/gen_nsenc.py             # NeXTSTEP encoding, from tools/NEXTSTEP.TXT
+python3 tools/gen_icon.py              # app/SecureShell.tiff, in the layout NeXT's Edit.app uses
 python3 tools/gen_vectors.py           # tests/vectors.h (independent reference implementations)
 python3 tools/gen_bn_vectors.py        # big-integer vectors from Python's integers
 python3 tools/gen_ec_vectors.py        # curve vectors from OpenSSL

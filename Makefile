@@ -87,7 +87,7 @@ check-objc:
 # Package the sources for transfer into the OPENSTEP VM.
 #   dist/SSH.TAR  plain ustar archive (extract with:  tar xf SSH.TAR)
 #   dist/SSH.ISO  a CD image containing SSH.TAR (attach it as a CD-ROM in the VM)
-DISTFILES = README.md Makefile.openstep core term app tests tools docs
+DISTFILES = README.md Makefile.openstep core term app tests tools
 dist:
 	mkdir -p dist
 	COPYFILE_DISABLE=1 tar --format ustar --exclude '*.o' --exclude '.DS_Store' \

@@ -10,6 +10,7 @@
 #import "ConnectController.h"
 #import "TerminalView.h"
 #import "KeyGenController.h"
+#import "UIHelpers.h"
 #include "ssh_key.h"
 #include "rng.h"
 #include <sys/stat.h>
@@ -33,6 +34,14 @@ void PSshow(const char *s)
 @interface ConnectController (SmokePrivate) - (void)buildPanel; @end
 
 static int pass, fail;
+
+static void trace_to(NSString *path, const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    SSTraceV(path, fmt, ap);
+    va_end(ap);
+}
 #define EXPECT(cond, what) do { if (cond) pass++; else { fail++; printf("  FAIL: %s\n", what); } } while (0)
 
 static int shown_contains(const char *text)
@@ -131,6 +140,25 @@ int main(int argc, char *argv[])
             err = [kg generateToPath:[dir stringByAppendingPathComponent:@"ui_smoke_key2"] comment:@"bad'; rm -rf ~; '" passphrase:""];
             EXPECT(err != nil, "a comment that could inject shell syntax is refused");
             remove([path cString]); remove([[path stringByAppendingString:@".pub"] cString]);
+        }
+
+        /* 2c. startup trace: opt-in by the existence of the trace file (SSTraceV is SSTrace with a chosen path) */
+        {
+            NSString *dir = [NSString stringWithCString:(argc > 1 ? argv[1] : "/tmp")];
+            NSString *tr = [dir stringByAppendingPathComponent:@"ui_smoke.trace"];
+            NSString *text;
+            struct stat st;
+
+            remove([tr cString]);
+            trace_to(tr, "must not be written: %d", 1);
+            EXPECT(stat([tr cString], &st) != 0, "the trace does nothing, and creates nothing, when the trace file is absent");
+            fclose(fopen([tr cString], "w"));                          /* the user runs: touch ~/.SecureShell.trace */
+            trace_to(tr, "first %s %d", "line", 7);
+            trace_to(tr, "second");
+            text = [NSString stringWithContentsOfFile:tr];
+            EXPECT([text isEqualToString:@"first line 7\nsecond\n"], "the trace appends one line per call to an existing file");
+            EXPECT(strcmp(SSCS(nil), "(nil)") == 0 && strcmp(SSCS(@"x"), "x") == 0, "SSCS is nil-safe");
+            remove([tr cString]);
         }
 
         /* 3. terminal view: geometry */

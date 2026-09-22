@@ -1,4 +1,5 @@
 #import "Compat.h"
+#include <stdarg.h>
 
 /* Small control factories shared by the hand-built panels.  All return autoreleased objects. */
 NSTextField *ui_label(NSString *text, NSRect frame);
@@ -17,3 +18,10 @@ NSData   *ui_utf8_cstring(NSString *s);              /* bytes of s in UTF-8 plus
 NSString *ui_format_size(unsigned long long n);       /* "1.5 MB" */
 NSString *ui_format_time(unsigned secs_since_1970);   /* "2026-09-21 15:04" in local time */
 NSString *ui_format_mode(unsigned perms);             /* "drwxr-xr-x" */
+
+/* Startup diagnostics.  If the file ~/.SecureShell.trace exists (create it with `touch`), SSTrace()
+ * appends printf-style lines to it; otherwise it does nothing.  Workspace discards a launched
+ * application's stderr, so this is how to see how far a launch from Workspace got. */
+void SSTrace(const char *fmt, ...);
+void SSTraceV(NSString *path, const char *fmt, va_list ap);   /* same, for any path (used by the tests) */
+#define SSCS(s) ((s) != nil ? [(s) cString] : "(nil)")      /* an NSString as a C string, nil-safe */

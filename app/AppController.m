@@ -2,6 +2,7 @@
 #import "ConnectController.h"
 #import "KeyGenController.h"
 #import "SFTPBrowser.h"
+#import "UIHelpers.h"
 #include "rng.h"
 #include <sys/types.h>
 #include <sys/stat.h>
@@ -157,10 +158,12 @@
 {
     launched = YES;
     NSLog(@"SecureShell: applicationDidFinishLaunching");
+    SSTrace("applicationDidFinishLaunching");
     [self prepareSecurityDirectory];
     ssh_rng_seed_system();                              /* /dev/urandom, if this system has one */
     ssh_rng_load_seed([seedPath cString]);              /* and last run's seed (replaced immediately) */
     NSLog(@"SecureShell: random pool holds %d of %d bits", ssh_rng_credited(), SSH_RNG_MIN_BITS);
+    SSTrace("random pool holds %d of %d bits", ssh_rng_credited(), SSH_RNG_MIN_BITS);
     if (ssh_rng_ready()) {
         ssh_rng_save_seed([seedPath cString]);
         [self newConnection:nil];

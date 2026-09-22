@@ -3,6 +3,27 @@
 #include <string.h>
 #include <time.h>
 #include <stdlib.h>
+#include <stdarg.h>
+
+void SSTraceV(NSString *path, const char *fmt, va_list ap)
+{
+    FILE *f = fopen([path cString], "r+");      /* "r+" never creates the file: tracing is opt-in */
+
+    if (f == NULL) return;
+    fseek(f, 0L, SEEK_END);
+    vfprintf(f, fmt, ap);
+    fputc('\n', f);
+    fclose(f);                                  /* closed every time so a crash keeps earlier lines */
+}
+
+void SSTrace(const char *fmt, ...)
+{
+    va_list ap;
+
+    va_start(ap, fmt);
+    SSTraceV([NSHomeDirectory() stringByAppendingPathComponent:@".SecureShell.trace"], fmt, ap);
+    va_end(ap);
+}
 
 NSTextField *ui_label(NSString *text, NSRect frame)
 {

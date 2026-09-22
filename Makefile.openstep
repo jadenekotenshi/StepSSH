@@ -14,6 +14,14 @@ CFLAGS   = $(OPT) -Wall $(DEFS) -Icore -Iterm -Iapp
 LIBS     = -framework AppKit -framework Foundation
 APP      = SecureShell.app
 
+# Workspace takes an application's icon (and its file-type table) from a read-only __ICON segment
+# linked into the executable, not from a file in the .app folder (compare /NextApps/Edit.app, whose
+# only non-language files are the executable and some TIFFs).  app/SecureShell.iconheader says which
+# icon belongs to the app; app/SecureShell.tiff is the icon (regenerate: python3 tools/gen_icon.py).
+ICONHDR   = app/SecureShell.iconheader
+ICONTIFF  = app/SecureShell.tiff
+ICONFLAGS = -sectcreate __ICON __header $(ICONHDR) -segprot __ICON r r -sectcreate __ICON app $(ICONTIFF)
+
 CORE_OBJS = core/aes.o core/bcrypt.o core/bignum.o core/blowfish.o core/chacha.o core/ecc.o core/hmac.o \
             core/knownhosts.o core/md5.o core/nacl.o core/rng.o core/rsa.o core/sftp.o core/sha1.o core/sha2.o core/ssh.o core/ssh_auth.o \
             core/ssh_chan.o core/ssh_key.o core/wire.o
@@ -32,10 +40,14 @@ APP_OBJS  = app/AppController.o app/ConnectController.o app/KeyGenController.o \
 
 all: $(APP)/SecureShell
 
-$(APP)/SecureShell: $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS)
+$(APP)/SecureShell: $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONHDR) $(ICONTIFF)
 	-mkdir $(APP)
 	@( cd $(APP) ) >/dev/null 2>&1 || { echo "make: $(APP) is missing or is not a directory:"; ls -ld $(APP); echo "remove it and run make again"; exit 1; }
-	$(CC) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(LIBS)
+	$(CC) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(ICONFLAGS) $(LIBS) || { echo "make: linking with the __ICON segment failed; retrying without an icon"; $(CC) -o $(APP)/SecureShell $(CORE_OBJS) $(TERM_OBJS) $(APP_OBJS) $(LIBS); }
+
+# Show what was linked in: expect a segment __ICON with sections __header and app.
+iconcheck:
+	otool -l $(APP)/SecureShell | grep -A 3 __ICON
 
 # ---- unit tests (plain C, no AppKit) ----
 # NOTE: OPENSTEP's mkdir has no -p option (it would create a directory named "-p").

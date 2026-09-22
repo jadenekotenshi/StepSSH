@@ -40,6 +40,14 @@ check "floor/ceil/strdup in app code (implicit decl. is silently wrong for doubl
 check "mkdir -p / cp -r / install -D in Makefile.openstep (OPENSTEP mkdir has no -p)" \
       '(^|[[:space:]@;&|])(mkdir[[:space:]]+-p|install[[:space:]]+-D|cp[[:space:]]+-a)\b' Makefile.openstep
 
+# --- the application icon: Workspace reads it from a __ICON segment linked into the executable ---
+if [ ! -f app/SecureShell.iconheader ] || [ ! -f app/SecureShell.tiff ]; then
+    echo "LINT: app/SecureShell.iconheader and app/SecureShell.tiff are both required (Workspace icon)"; status=1
+elif ! awk -F'\t' 'NF != 4 || ($1 != "F" && $1 != "S") { bad = 1 } END { exit bad }' app/SecureShell.iconheader; then
+    echo "LINT: app/SecureShell.iconheader lines must be 4 TAB-separated fields starting F or S"; status=1
+fi
+grep -q "__ICON" Makefile.openstep || { echo "LINT: Makefile.openstep does not link the __ICON segment"; status=1; }
+
 # --- every source file must be listed in the hand-written OPENSTEP object list ---
 for f in core/*.c term/*.c app/*.m; do
     o=$(echo "$f" | sed 's/\.[cm]$/.o/')
