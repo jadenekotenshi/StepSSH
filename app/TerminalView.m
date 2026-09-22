@@ -22,6 +22,7 @@ static int iceil(float x)  { int i = (int)x; return (x > (float)i) ? i + 1 : i; 
 - (void)syncScroller;
 - (void)markDirty;
 - (void)sendString:(NSString *)s;
+- (void)escTimeout:(NSTimer *)timer;
 @end
 
 @implementation TerminalView
@@ -57,6 +58,7 @@ static int iceil(float x)  { int i = (int)x; return (x > (float)i) ? i + 1 : i; 
 - (void)dealloc
 {
     int i;
+    [escTimer invalidate];
     vt_free(term);
     [font release];
     [defaultFg release];
@@ -377,17 +379,28 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
     if (!chars || [chars length] == 0) return;
     c = [chars characterAtIndex:0];
 
-    /* Diagnostic only: a lone ESC was JUST reported as its own, unrecognized keyDown (see below).
-     * A single physical arrow key that OPENSTEP is delivering as ESC-then-letter (the old VT52
-     * convention, not the KEYCH_UP-style single codepoint this file assumes) would show up as two
-     * back-to-back keyDown events; a person pressing Escape and then typing something would not be
-     * back-to-back the same way. This says which one it looks like, without logging what was typed. */
-    if (pendingEsc) {
-        double dt = [theEvent timestamp] - pendingEscTime;
-        pendingEsc = NO;
-        SSTrace("keyDown: char U+%04X (%d chars, mods 0x%x) arrived %.1f ms after a bare ESC -- %s",
-                (unsigned)c, (int)[chars length], flags, dt * 1000.0,
-                dt < 0.05 ? "close enough to be one physical keypress" : "too far apart for that");
+    /* A held-back ESC (see below) is resolved by whatever key comes next, before anything else
+     * about this keyDown is interpreted. */
+    if (escPending) {
+        int key2 = 0;
+        escPending = NO;
+        [escTimer invalidate]; escTimer = nil;
+        if (flags == 0 && [chars length] == 1) {
+            switch (c) {
+            case 'A': key2 = VT_KEY_UP; break;
+            case 'B': key2 = VT_KEY_DOWN; break;
+            case 'C': key2 = VT_KEY_RIGHT; break;
+            case 'D': key2 = VT_KEY_LEFT; break;
+            }
+        }
+        if (key2) {
+            n = vt_encode_key(term, key2, 0, out);
+            if (n) [delegate terminalView:self sendBytes:out length:n];
+            return;                          /* the held ESC was the first half of this pair: not sent on its own */
+        }
+        out[0] = 0x1b;
+        [delegate terminalView:self sendBytes:out length:1];
+        /* falls through: this key is handled normally below, as if the ESC had never been held back */
     }
 
     if ((flags & NSShiftKeyMask) && (c == KEYCH_PGUP || c == KEYCH_PGDN)) {        /* local scrollback */
@@ -439,18 +452,29 @@ static unsigned cell_key(const vt_cell *c, int invert, int reverse_screen,
         return;
     }
 
-    /* Diagnostic only: a key that reaches here unrecognized and is not ordinary printable text or
-     * a plain control key is logged (never ordinary text -- that could be something typed at a
-     * shell prompt).  Enable with:  touch ~/.SecureShell.trace  -- see README.md. */
+    /* A lone, unmodified ESC is held rather than sent immediately, in case it is the first half of
+     * an arrow key (see escPending above); resolved within escTimeout if nothing else arrives.
+     * Anything else unrecognized here is only logged, never held -- never ordinary printable text,
+     * which could be something typed at a shell prompt.  Enable with: touch ~/.SecureShell.trace */
+    if (c == 0x1b && [chars length] == 1 && flags == 0) {
+        escPending = YES;
+        escTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:self
+                                                    selector:@selector(escTimeout:) userInfo:nil repeats:NO];
+        return;
+    }
     if (c > 0x7e || (c < 0x20 && c != 0x09 && c != 0x0d)) {
         SSTrace("keyDown: unrecognized key, first char U+%04X (%d chars total), modifierFlags 0x%x",
                 (unsigned)c, (int)[chars length], flags);
-        if (c == 0x1b && [chars length] == 1 && flags == 0) {
-            pendingEsc = YES;
-            pendingEscTime = [theEvent timestamp];
-        }
     }
     [self sendString:chars];
+}
+
+- (void)escTimeout:(NSTimer *)timer
+{
+    unsigned char esc = 0x1b;
+    escPending = NO;
+    escTimer = nil;                          /* a non-repeating NSTimer invalidates itself on firing */
+    [delegate terminalView:self sendBytes:&esc length:1];
 }
 
 /* ---------------------------------------------------------------- */

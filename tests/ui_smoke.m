@@ -36,14 +36,16 @@ void PSshow(const char *s)
 @interface KeyCapture : NSObject
 {
 @public
-    unsigned char bytes[64];
-    int n;
+    unsigned char bytes[64];       /* the most recent call's bytes */
+    int n;                         /* ... and its length */
     int calls;
+    unsigned char firstByte[8];    /* first byte of each of up to the first 8 calls, in order */
 }
 @end
 @implementation KeyCapture
 - (void)terminalView:(id)tv sendBytes:(const unsigned char *)b length:(int)len
 {
+    if (calls < 8 && len > 0) firstByte[calls] = b[0];
     calls++;
     n = (len > 64) ? 64 : len;
     memcpy(bytes, b, n);
@@ -66,12 +68,18 @@ static void trace_to(NSString *path, const char *fmt, ...)
 /* A keyDown: NSEvent carrying exactly one character, no modifiers -- what TerminalView reads via
  * -[NSEvent characters].  (+keyEventWithType:... is deprecated on modern AppKit, not on OpenStep;
  * that is fine here, this file is never linked into the real app.) */
-static NSEvent *key_event(unichar ch)
+static NSEvent *key_event_mods(unichar ch, unsigned mods)
 {
     NSString *s = [NSString stringWithCharacters:&ch length:1];
-    return [NSEvent keyEventWithType:NSKeyDown location:NSZeroPoint modifierFlags:0 timestamp:0
+    return [NSEvent keyEventWithType:NSKeyDown location:NSZeroPoint modifierFlags:mods timestamp:0
                          windowNumber:0 context:nil characters:s charactersIgnoringModifiers:s
                             isARepeat:NO keyCode:0];
+}
+static NSEvent *key_event(unichar ch) { return key_event_mods(ch, 0); }
+
+static void spin(double seconds)
+{
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]];
 }
 #define EXPECT(cond, what) do { if (cond) pass++; else { fail++; printf("  FAIL: %s\n", what); } } while (0)
 
@@ -224,10 +232,11 @@ int main(int argc, char *argv[])
         }
         EXPECT(n_shown < 60, "drawing a mostly empty screen issues few text calls (runs, not cells)");
 
-        /* 4b. keyboard: arrow keys, and the diagnostic trace for anything unrecognized.
-         * NOT yet confirmed that OPENSTEP's real -[NSEvent characters] uses these NSUpArrowFunctionKey-
-         * style codepoints for arrow keys (see README.md); this documents & protects the current
-         * assumption, and the privacy rule that plain typed text is never written to the trace file. */
+        /* 4b. keyboard: arrow keys via the KEYCH_UP-style codepoint (still supported, though not
+         * confirmed that real OPENSTEP delivers it -- see README.md), and the confirmed real behaviour:
+         * OPENSTEP sends an arrow key as two separate keyDown events, a lone ESC then a lone letter
+         * (A/B/C/D = up/down/right/left, the classic VT52 cursor codes, no CSI bracket). A lone ESC is
+         * held briefly to see whether one of those letters follows. */
         kc = [[KeyCapture alloc] init];
         [tv setDelegate:kc];
         [tv keyDown:key_event(KEYCH_UP)];
@@ -236,18 +245,37 @@ int main(int argc, char *argv[])
         kc->calls = 0;
         [tv keyDown:key_event('A')];
         EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 'A',
-               "a plain capital A is sent as itself, not mistaken for an arrow key");
-        /* An unrecognized special key also logs to ~/.SecureShell.trace via the same SSTrace()
-         * mechanism tested generically in 2c above (NSHomeDirectory cannot be redirected from a
-         * test, so the real destination file is not touched here). The ESC-then-next-key timing
-         * diagnostic only observes and logs -- it must not change what either key sends. */
+               "a plain capital A, out of the blue, is sent as itself -- not mistaken for an arrow key");
+
         kc->calls = 0;
         [tv keyDown:key_event(0x1b)];
-        EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 0x1b, "a lone ESC keypress is still sent as itself");
-        kc->calls = 0;
+        EXPECT(kc->calls == 0, "a lone ESC is held, not sent immediately (it might be an arrow key)");
         [tv keyDown:key_event('A')];
-        EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 'A',
-               "and the keypress right after it is still sent as itself, unaffected by the timing check");
+        EXPECT(kc->calls == 1 && kc->n == 3 && memcmp(kc->bytes, "[A", 3) == 0,
+               "ESC then A: the VT100 cursor-up sequence, not two raw bytes -- this is the reported bug");
+        kc->calls = 0;
+        [tv keyDown:key_event(0x1b)]; [tv keyDown:key_event('B')];
+        EXPECT(kc->calls == 1 && kc->n == 3 && memcmp(kc->bytes, "[B", 3) == 0, "ESC then B: cursor-down");
+        kc->calls = 0;
+        [tv keyDown:key_event(0x1b)]; [tv keyDown:key_event('C')];
+        EXPECT(kc->calls == 1 && kc->n == 3 && memcmp(kc->bytes, "[C", 3) == 0, "ESC then C: cursor-right");
+        kc->calls = 0;
+        [tv keyDown:key_event(0x1b)]; [tv keyDown:key_event('D')];
+        EXPECT(kc->calls == 1 && kc->n == 3 && memcmp(kc->bytes, "[D", 3) == 0, "ESC then D: cursor-left");
+
+        kc->calls = 0;
+        [tv keyDown:key_event(0x1b)]; [tv keyDown:key_event('x')];
+        EXPECT(kc->calls == 2 && kc->firstByte[0] == 0x1b && kc->firstByte[1] == 'x',
+               "ESC then an unrelated letter: both sent, in order, as a real Escape keypress followed by typing");
+        kc->calls = 0;
+        [tv keyDown:key_event(0x1b)]; [tv keyDown:key_event_mods('A', NSShiftKeyMask)];
+        EXPECT(kc->calls == 2 && kc->firstByte[0] == 0x1b,
+               "ESC then a MODIFIED A: not folded into an arrow key either -- only an unmodified letter counts");
+        kc->calls = 0;
+        [tv keyDown:key_event(0x1b)];
+        spin(0.12);
+        EXPECT(kc->calls == 1 && kc->n == 1 && kc->bytes[0] == 0x1b,
+               "ESC with nothing following within the window is sent on its own after a short wait");
 
         /* 5. selection */
         [tv selectAll:nil];

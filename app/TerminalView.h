@@ -21,9 +21,13 @@
     int        lastCx, lastCy, lastSb;
     int        deleteSendsBackspace;       /* 1: Delete key sends ^H, 0: sends DEL */
     int        altSendsEscape;
-    BOOL           pendingEsc;             /* diagnostic only: a lone, unmodified ESC keyDown just
-                                             * happened; the very next keyDown logs how long after */
-    NSTimeInterval pendingEscTime;
+    /* OPENSTEP delivers an arrow key as two separate keyDown events -- a lone, unmodified ESC, then
+     * a lone letter (A/B/C/D for up/down/right/left: the old VT52 cursor codes, no CSI bracket) --
+     * rather than one event carrying a KEYCH_UP-style codepoint. A lone ESC is held for a short time
+     * to see whether one of those letters follows, the same way terminals/readline disambiguate a
+     * bare Escape keypress from the start of a multi-byte special-key sequence. */
+    BOOL        escPending;
+    NSTimer    *escTimer;
     NSColor   *defaultFg, *defaultBg;
     NSColor   *palette[256];
 }

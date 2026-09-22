@@ -50,27 +50,38 @@ reasonable on that CPU.
 
 Also confirmed: copy and paste within the VM, and SFTP upload/download.
 
-**Known bug, reported by the author:** the arrow keys print a literal `A`/`B`/`C`/`D` instead of moving the
-cursor. `vt_encode_key()` itself is fully unit-tested and produces the right VT100 sequence, so the break is
-in `-[NSEvent characters]` not delivering the `NSUpArrowFunctionKey`-style codepoints (0xF700...) that
-`app/Compat.h` assumed -- exactly the item marked `[V]` there. A first trace capture (one keypress) showed
-the *entire* content of that keyDown event was a lone ESC (`U+001B`) -- not "ESC then A" in one event, and
-not "A" alone. Since ordinary printable text is deliberately never logged, the "A" that appeared on screen
-must have arrived as a second, separate keyDown event straight after -- consistent with OPENSTEP using the
-old VT52 convention (`ESC A`/`ESC B`/`ESC C`/`ESC D` for the four arrow keys) rather than a single codepoint.
-There is no safe blind fix from one sample: a real, deliberate Escape keypress (common in vi) followed by
-ordinary typing would look the same unless the timing between the two events is known, and only one
-direction was tried. `app/TerminalView.m` now also logs, for the keypress immediately following a lone ESC,
-how many milliseconds after it arrived -- close together (under 50 ms) points at one physical key producing
-two events; far apart points at two unrelated keypresses. Run
+**Fixed, pending confirmation on OPENSTEP:** the arrow keys printed a literal `A`/`B`/`C`/`D` instead of
+moving the cursor -- but only *in an editor's insert mode*; in `vi`'s command mode the arrows already worked.
+That was the key clue: `vi`'s command mode has always had built-in recognition of the old VT52 cursor codes
+(`ESC A`/`ESC B`/`ESC C`/`ESC D` -- no CSI bracket, predating ANSI terminals), while insert mode only
+recognises the modern ANSI form (`ESC [ A`). A trace capture confirmed it: OPENSTEP delivers an arrow key
+as **two separate keyDown events** -- a lone, unmodified `ESC` (`U+001B`, alone, nothing else in the same
+event), then a separate keyDown for a lone, unmodified letter (`A`/`B`/`C`/`D` for up/down/right/left) --
+never one event carrying a single codepoint, and never the bracket. `app/Compat.h`'s `NSUpArrowFunctionKey`-
+style codepoints (0xF700...) are real AppKit constants, just apparently not what this OPENSTEP/86Box keyboard
+setup actually sends.
+
+`app/TerminalView.m` now holds a lone, unmodified ESC for 50&nbsp;ms (the same technique terminals and
+readline use to tell "the start of a function-key sequence" from "someone pressed Escape") -- if one of
+`A`/`B`/`C`/`D` follows, unmodified, within that window, it sends the correct VT100 sequence instead of the
+raw pair; otherwise (a different key, a modified key, or nothing at all) the ESC is sent on its own and the
+next key is handled normally, so a real Escape keypress (very common in `vi`) still works as before, just
+delayed by up to 50&nbsp;ms -- well under typical SSH network latency. Covered by 8 new `ui-smoke` checks,
+including the real timeout path (57 checks total, up from 49).
+
+**Still needed:** the *other* special keys (Backspace, Tab, Home/End, Page Up/Down, F1-F12) were not part of
+that trace and may have the same two-event problem with different candidate letters/digits following the
+ESC -- or may not send ESC at all. Nothing has been changed for them yet; guessing their mapping without
+data risks the same wrong-fix problem the arrows almost had. If any of them misbehave, run
 
 ```sh
 touch ~/.SecureShell.trace
 ```
 
-then press Up, Down, Left and Right *individually* (so each direction's pair is on its own), plus Backspace,
-Tab, Home/End/Page Up/Down and F1-F12, and read the file. `NSHomeDirectory()`, `getenv("HOME")` and
-`NSUserName()` are now logged separately at startup too (see the next paragraph).
+press the misbehaving key on its own a couple of times, and send the file -- a lone ESC entry followed by
+knowing what character appeared in the remote editor is enough to extend the same fix to that key.
+`NSHomeDirectory()`, `getenv("HOME")` and `NSUserName()` are also logged separately at startup now (see the
+next paragraph).
 
 **Second finding from that trace, unrelated to the arrow keys, now explained:** `cwd` and `HOME` were both `/`
 when launched from Workspace Manager, which is also why the trace file turned up at `/.SecureShell.trace`
@@ -140,7 +151,9 @@ cat ~/.SecureShell.trace                 # argv, working directory, and each sta
 ### Things still worth watching on OPENSTEP (marked `[V]` in `app/Compat.h`)
 
 - **`<AppKit/psops.h>`** &mdash; `PSshow`/`PSmoveto`, used to draw terminal text.
-- **Function-key codes** `0xF700..0xF72D` in `-[NSEvent characters]`.
+- **Function-key codes** `0xF700..0xF72D` in `-[NSEvent characters]` -- confirmed *not* how arrow keys are
+  delivered on this setup (see the arrow-key writeup above); Insert/Delete/Home/End/Page Up/Down/F1-F12
+  still use this and are unconfirmed.
 - `-[NSWindow setResizeIncrements:]` (guarded with `respondsToSelector:`).
 - `NSScroller` part constants; `NSTableView -clickedRow` and `-selectedRowEnumerator`.
 - `gethostbyname()` blocks the UI while resolving (use an IP address if slow).
