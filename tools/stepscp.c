@@ -249,6 +249,15 @@ int main(int argc, char **argv)
             }
             rpath = cli_xstrdup(colon + 1);
             lpath = cli_xstrdup(uploading ? src : dst);
+            if (uploading && rpath[0] == '\0') {
+                /* "user@host:" with nothing after the colon means "into the home directory,
+                 * same name" in real scp -- but real scp gets that for free from the legacy
+                 * scp protocol's server-side shell context. This only ever speaks SFTP (see
+                 * this file's own header comment), which has no such context, so the client
+                 * has to supply a filename itself: the source's own basename. */
+                const char *slash = strrchr(lpath, '/');
+                rpath = cli_xstrdup(slash ? slash + 1 : lpath);
+            }
         }
     }
 

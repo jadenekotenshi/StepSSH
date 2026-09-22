@@ -265,7 +265,10 @@ forwarding anything would look far more like a bug than an error does.
   The wire protocol is SFTP, not the legacy scp/rcp protocol -- like modern OpenSSH's `scp` can be
   told to do, and every OpenSSH `sshd` runs an `sftp-server`, so this is rarely a practical
   difference. `-p` preserves the source file's permission bits, not its modification time (there is
-  no SFTP primitive for that exposed at the C API level yet).
+  no SFTP primitive for that exposed at the C API level yet). A bare `user@host:` (nothing after the
+  colon) uploads under the source's own basename, into the home directory, matching real `scp` --
+  handled client-side, since SFTP has no server-side shell context to get it for free the way the
+  legacy scp protocol does.
 
 ## Mouse reporting
 

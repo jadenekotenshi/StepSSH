@@ -297,6 +297,20 @@ RS=$T/remote_step; mkdir "$RS"
 echo "a small file" > "$T/step_up.txt"
 "$STEPSCP" -P $PORT -i "$T/user" -o StrictHostKeyChecking=no "$T/step_up.txt" "$ME@127.0.0.1:$RS/up.txt" >/dev/null
 [ "$(cat "$RS/up.txt" 2>/dev/null)" = "a small file" ] && ok "stepscp: single-file upload" || bad "stepscp upload"
+# "host:" with nothing after the colon means "into the home directory, same name" -- which is
+# the real login home directory here (no ChrootDirectory in this sshd_config), so this test
+# necessarily reaches outside $T. Use a name distinctive enough that colliding with a real file
+# already there is not a realistic risk, refuse instead of overwriting on the off chance one
+# exists anyway, and always clean up afterward.
+BARECOLON=stepscp_interop_bare_colon_test.$$
+if [ -e "$HOME/$BARECOLON" ]; then
+    bad "stepscp: bare 'host:' (no path) uploads under the source's own basename" "refusing: $HOME/$BARECOLON already exists"
+else
+    echo "a small file" > "$T/$BARECOLON"
+    "$STEPSCP" -P $PORT -i "$T/user" -o StrictHostKeyChecking=no "$T/$BARECOLON" "$ME@127.0.0.1:" >/dev/null
+    [ "$(cat "$HOME/$BARECOLON" 2>/dev/null)" = "a small file" ] && ok "stepscp: bare 'host:' (no path) uploads under the source's own basename" || bad "stepscp bare-colon upload"
+    rm -f "$HOME/$BARECOLON"
+fi
 "$STEPSCP" -P $PORT -i "$T/user" -o StrictHostKeyChecking=no "$ME@127.0.0.1:$RS/up.txt" "$T/step_down.txt" >/dev/null
 [ "$(cat "$T/step_down.txt" 2>/dev/null)" = "a small file" ] && ok "stepscp: single-file download" || bad "stepscp download"
 
