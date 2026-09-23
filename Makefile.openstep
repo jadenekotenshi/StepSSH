@@ -175,16 +175,17 @@ install: all tools
 # `package` is a csh script (per the HOWTO), and very plausibly splits each line on whitespace
 # naively, in a way multiple consecutive spaces (rather than the single space every field in the
 # real OpenWrite.info example actually uses) breaks. Single-spaced now, matching that example
-# exactly instead of the more readable aligned columns.
+# exactly instead of the more readable aligned columns. Next: DiskName was found, but Installer.app
+# then failed with "error opening StepSSH.sizes" -- `package` had left that one file mode 644 while
+# every other member (.info, .tar.Z, and OpenWrite.pkg's own .bom/.sizes/.tiff for comparison) was
+# 444. Not explained, just observed and matched: chmod it to 444 after `package` runs.
 #
 #   make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools, for Installer.app
 #   make -f Makefile.openstep pkg-fat      # same, but the app + tools are i386+m68k+sparc fat
 #
 # UNVERIFIED: still not confirmed that Installer.app accepts the result end to end. If it still
-# rejects the .info file, or anything else about the built .pkg looks wrong, send over the exact
-# contents of the StepSSH.info that ends up inside the built StepSSH.pkg (not just this recipe's
-# intermediate copy) so it can be compared directly against a known-good one instead of guessed at
-# again.
+# rejects something, send over `ls -la StepSSH.pkg` and whichever file it names, so the next fix
+# is against what's actually there instead of another guess.
 PKG     = StepSSH.pkg
 PKGROOT = pkgroot
 PKGINFO = StepSSH.info
@@ -208,6 +209,7 @@ pkg-assemble:
 	echo "UseUserMask YES" >> $(PKGINFO)
 	echo "LongFileNames YES" >> $(PKGINFO)
 	/NextAdmin/Installer.app/package $(PKGROOT)/ $(PKGINFO)
+	-chmod 444 $(PKG)/StepSSH.sizes
 	rm -rf $(PKGROOT) $(PKGINFO)
 	@echo "built $(PKG) via the real Installer.app/package tool -- still UNVERIFIED end to end, see this target's own comment above"
 

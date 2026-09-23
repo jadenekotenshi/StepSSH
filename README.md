@@ -160,7 +160,11 @@ keyword/value pairs padded into aligned columns, but Installer.app then failed t
 with `file StepSSH.info contains no DiskName field` -- `package` is a csh script, and very
 plausibly splits each line on whitespace naively, in a way multiple consecutive spaces (rather
 than the single space every field in the real OpenWrite.info example actually uses) breaks.
-Single-spaced now, matching that example exactly. **Still UNVERIFIED end to end.**
+Single-spaced now, matching that example exactly. DiskName was then found, but Installer.app failed
+one step later with `error opening StepSSH.sizes` -- `package` had left that one file mode 644
+while every other member (`.info`, `.tar.Z`, and OpenWrite.pkg's own `.bom`/`.sizes`/`.tiff` for
+comparison) was 444. Not explained, just observed and matched: `chmod 444` it after `package` runs.
+**Still UNVERIFIED end to end.**
 
 ### Fat (multi-architecture) binaries
 
