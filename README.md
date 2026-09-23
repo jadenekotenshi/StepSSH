@@ -125,7 +125,7 @@ make -f Makefile.openstep test      # FIRST: the C core on the real compiler
 make -f Makefile.openstep           # builds StepSSH.app
 make -f Makefile.openstep tools     # builds stepssh, stepssh-keygen, stepscp
 make -f Makefile.openstep install   # the above into /LocalApps and /usr/local/bin (see below)
-make -f Makefile.openstep pkg       # StepSSH.pkg for Installer.app (see Packaging below)
+make -f Makefile.openstep pkg       # StepSSH.pkg + StepSSHTools.pkg for Installer.app (see Packaging below)
 make -f Makefile.openstep bench     # how long RSA, bcrypt, Diffie-Hellman... take on this CPU
 ```
 
@@ -136,40 +136,41 @@ entropy; that is expected.) `make` on OPENSTEP has no `mkdir -p`, so the makefil
 ### Packaging (.pkg for Installer.app)
 
 ```sh
-make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools
-make -f Makefile.openstep pkg-fat      # StepSSH.pkg: i386+m68k+sparc fat app + tools
+make -f Makefile.openstep pkg          # StepSSH.pkg + StepSSHTools.pkg: thin
+make -f Makefile.openstep pkg-fat      # same, but i386+m68k+sparc fat
 ```
 
-Lays out the app and tools under `/LocalApps` and `/usr/local/bin` in a "fake root" tree, writes an
-`.info` metadata file, and hands both to the real packaging tool NEXTSTEP/OPENSTEP's Installer.app
-ships (`/NextAdmin/Installer.app/package`) -- which builds the compressed archive, the `.bom`
-(bill of materials), and the `.sizes` file itself, and drops the finished `StepSSH.pkg` in place.
-An earlier version of this target hand-assembled a `.pkg`-shaped folder directly instead of calling
-`package`, using a `{ Key = value; }` `.info` syntax guessed from general NeXT property-list
-conventions; Workspace Manager opened the result as a plain folder rather than handing it to
-Installer.app, presumably because it never went through the real tool that produces the format
-Workspace actually recognises. Rebuilt against ["Making Packages
-I"](https://web.archive.org/web/20221229175934/http://www.nextcomputers.org/NeXTfiles/Software/NEXTSTEP/Developer/making_nextstep_packages.pdf),
-a NEXTSTEP packaging HOWTO that documents `package` and the (plain `Keyword value` line, not a
-property list) `.info` format directly, and confirmed against a real shipped package's actual
-contents (Lighthouse Design's OpenWrite 2.1) -- a `.pkg` is a flat directory of `<Name>.bom`
-(binary)/`.info` (text)/`.sizes` (text)/`.tar.Z` (old `compress`, not gzip), which also settled
-`DiskName`'s casing and two optional `.info` fields (`UseUserMask`, `LongFileNames`) the HOWTO
-didn't mention. Real hardware then caught what neither source did: `package` built fine with
-keyword/value pairs padded into aligned columns, but Installer.app then failed to open the result
-with `file StepSSH.info contains no DiskName field` -- `package` is a csh script, and very
-plausibly splits each line on whitespace naively, in a way multiple consecutive spaces (rather
-than the single space every field in the real OpenWrite.info example actually uses) breaks.
-Single-spaced now, matching that example exactly. DiskName was then found, but Installer.app failed
-one step later with `error opening StepSSH.sizes` -- `package` had left that one file mode 644
-while every other member (`.info`, `.tar.Z`, and OpenWrite.pkg's own `.bom`/`.sizes`/`.tiff` for
-comparison) was 444. Not explained, just observed and matched: `chmod 444` it after `package` runs.
-That still didn't fix it -- turned out to be a one-off problem with Installer.app itself, not the
-package: running it attached to a terminal (`/NextAdmin/Installer.app/Installer StepSSH.pkg`)
-instead of double-clicking opened it successfully, and after that, double-clicking did too.
+Two packages -- `StepSSH.pkg` (the app, `DefaultLocation /LocalApps`) and `StepSSHTools.pkg`
+(`stepssh`/`stepssh-keygen`/`stepscp`, `DefaultLocation /usr/local`) -- each a "fake root" tree plus
+an `.info` metadata file, handed to the real packaging tool NEXTSTEP/OPENSTEP's Installer.app ships
+(`/NextAdmin/Installer.app/package`), which builds the compressed archive, the `.bom` (bill of
+materials), and the `.sizes` file itself.
 
-**Confirmed on real OPENSTEP 4.2 hardware**: both `pkg` and `pkg-fat` build a `StepSSH.pkg` that
-Installer.app opens and installs correctly, via `open` and via double-click in Workspace Manager.
+Getting here took several rounds against real hardware, each narrowing down a different assumption:
+an early version hand-assembled a `.pkg`-shaped folder directly instead of calling `package`, using
+a `{ Key = value; }` `.info` syntax guessed from general NeXT property-list conventions -- Workspace
+Manager opened the result as a plain folder rather than handing it to Installer.app, since it never
+went through the real tool that produces the format Workspace actually recognises. Rebuilt against
+["Making Packages I"](https://web.archive.org/web/20221229175934/http://www.nextcomputers.org/NeXTfiles/Software/NEXTSTEP/Developer/making_nextstep_packages.pdf)
+(a NEXTSTEP packaging HOWTO documenting `package` and the real, plain `Keyword value` `.info`
+format) and a real shipped package's actual contents (Lighthouse Design's OpenWrite 2.1) -- which
+also settled `DiskName`'s casing and two optional `.info` fields (`UseUserMask`, `LongFileNames`)
+the HOWTO didn't mention, and confirmed a `.pkg` is a flat directory of `.bom`/`.info`/`.sizes`/
+`.tar.Z` (old `compress`, not gzip). Real hardware then caught what neither source did: aligned,
+multi-space `.info` fields broke `package`'s own (csh-script, presumably naive whitespace-split)
+parsing, single-spaced now; `.sizes` was left mode 644 while every other member was 444 (chmod'd to
+match, though this specific one turned out to be a red herring); and finally, `error opening
+StepSSH.sizes` on double-click turned out to be a one-off Installer.app glitch, not a real bug --
+running it attached to a terminal instead opened it fine, and double-click worked from then on.
+
+That version *opened* successfully but failed to *install*, with `directory checksum error (0 !=
+2402)`. That pointed at something set aside earlier: it used a single package with `DefaultLocation
+/` and the payload split across two disconnected top-level directories (`LocalApps` and `usr`) --
+a structure with no precedent in anything confirmed working (the HOWTO's own example and
+OpenWrite.pkg both use one `DefaultLocation` with the whole payload relative to just that
+directory, and `OpenWrite_2.1/Packages/` itself ships as three separate single-purpose `.pkg`
+files rather than one combined one). Split into the two packages described above, each with its
+own single `DefaultLocation`. **Not yet confirmed on real hardware.**
 
 ### Fat (multi-architecture) binaries
 

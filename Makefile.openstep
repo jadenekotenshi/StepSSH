@@ -180,39 +180,63 @@ install: all tools
 # content confirmed identical in shape to OpenWrite.sizes -- turned out to be a one-off problem with
 # Installer.app itself, not the package: running it attached to a terminal instead of double-clicking
 # (`/NextAdmin/Installer.app/Installer StepSSH.pkg`) opened it successfully, and after that,
-# double-clicking from Workspace Manager did too.
+# double-clicking from Workspace Manager did too, but *installing* it then failed with "directory
+# checksum error (0 != 2402)". That pointed back at something set aside earlier: DefaultLocation "/"
+# with the payload split across two disconnected top-level directories (LocalApps and usr) has no
+# precedent in anything confirmed working here -- the HOWTO's own diff.pkg example and OpenWrite.pkg
+# both use a single DefaultLocation with the whole payload relative to just that one directory, and
+# OpenWrite_2.1/Packages/ itself ships as three separate single-purpose .pkg files rather than one
+# combined one. A 0-vs-nonzero directory checksum is consistent with `package` checksumming
+# DefaultLocation's *real* directory (which, for literal "/", is the whole live filesystem, nothing
+# like the fake root's sparse two-entry version it was built from) rather than the fake root. Split
+# into two packages, each with its own single DefaultLocation matching the confirmed pattern.
 #
-# CONFIRMED on real OPENSTEP 4.2 hardware: both `pkg` and `pkg-fat` build a StepSSH.pkg that
-# Installer.app opens and installs correctly, via `open` and via double-click in Workspace Manager.
+#   make -f Makefile.openstep pkg          # StepSSH.pkg + StepSSHTools.pkg: thin, for Installer.app
+#   make -f Makefile.openstep pkg-fat      # same, but i386+m68k+sparc fat
 #
-#   make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools, for Installer.app
-#   make -f Makefile.openstep pkg-fat      # same, but the app + tools are i386+m68k+sparc fat
-PKG     = StepSSH.pkg
-PKGROOT = pkgroot
-PKGINFO = StepSSH.info
+# UNVERIFIED: this structural change is reasoned from converging evidence (the HOWTO example, the
+# OpenWrite.pkg reference, and the shape of this specific error), not from a real machine directly --
+# still needs testing. If it still fails, report back exactly what happened.
+PKGAPP     = StepSSH.pkg
+PKGAPPROOT = pkgroot-app
+PKGAPPINFO = StepSSH.info
+
+PKGTOOLS     = StepSSHTools.pkg
+PKGTOOLSROOT = pkgroot-tools
+PKGTOOLSINFO = StepSSHTools.info
 
 pkg-assemble:
-	rm -rf $(PKG) $(PKGROOT) $(PKGINFO)
-	mkdir $(PKGROOT)
-	mkdir $(PKGROOT)/LocalApps
-	cp -r $(APP) $(PKGROOT)/LocalApps/
-	mkdir $(PKGROOT)/usr
-	mkdir $(PKGROOT)/usr/local
-	mkdir $(PKGROOT)/usr/local/bin
-	cp build/stepssh build/stepssh-keygen build/stepscp $(PKGROOT)/usr/local/bin/
-	echo "Title StepSSH" > $(PKGINFO)
-	echo "Version $(VERSION)" >> $(PKGINFO)
-	echo "Description SSH-2 client, plus the stepssh/stepssh-keygen/stepscp command-line tools." >> $(PKGINFO)
-	echo "DefaultLocation /" >> $(PKGINFO)
-	echo "DiskName StepSSH" >> $(PKGINFO)
-	echo "Relocatable NO" >> $(PKGINFO)
-	echo "Application YES" >> $(PKGINFO)
-	echo "UseUserMask YES" >> $(PKGINFO)
-	echo "LongFileNames YES" >> $(PKGINFO)
-	/NextAdmin/Installer.app/package $(PKGROOT)/ $(PKGINFO)
-	-chmod 444 $(PKG)/StepSSH.sizes
-	rm -rf $(PKGROOT) $(PKGINFO)
-	@echo "built $(PKG) via the real Installer.app/package tool"
+	rm -rf $(PKGAPP) $(PKGAPPROOT) $(PKGAPPINFO) $(PKGTOOLS) $(PKGTOOLSROOT) $(PKGTOOLSINFO)
+	mkdir $(PKGAPPROOT)
+	cp -r $(APP) $(PKGAPPROOT)/
+	echo "Title StepSSH" > $(PKGAPPINFO)
+	echo "Version $(VERSION)" >> $(PKGAPPINFO)
+	echo "Description SSH-2 client for OPENSTEP." >> $(PKGAPPINFO)
+	echo "DefaultLocation /LocalApps" >> $(PKGAPPINFO)
+	echo "DiskName StepSSH" >> $(PKGAPPINFO)
+	echo "Relocatable YES" >> $(PKGAPPINFO)
+	echo "Application YES" >> $(PKGAPPINFO)
+	echo "UseUserMask YES" >> $(PKGAPPINFO)
+	echo "LongFileNames YES" >> $(PKGAPPINFO)
+	/NextAdmin/Installer.app/package $(PKGAPPROOT)/ $(PKGAPPINFO)
+	-chmod 444 $(PKGAPP)/StepSSH.sizes
+	rm -rf $(PKGAPPROOT) $(PKGAPPINFO)
+	mkdir $(PKGTOOLSROOT)
+	mkdir $(PKGTOOLSROOT)/bin
+	cp build/stepssh build/stepssh-keygen build/stepscp $(PKGTOOLSROOT)/bin/
+	echo "Title StepSSHTools" > $(PKGTOOLSINFO)
+	echo "Version $(VERSION)" >> $(PKGTOOLSINFO)
+	echo "Description stepssh/stepssh-keygen/stepscp command-line tools." >> $(PKGTOOLSINFO)
+	echo "DefaultLocation /usr/local" >> $(PKGTOOLSINFO)
+	echo "DiskName StepSSHTools" >> $(PKGTOOLSINFO)
+	echo "Relocatable YES" >> $(PKGTOOLSINFO)
+	echo "Application NO" >> $(PKGTOOLSINFO)
+	echo "UseUserMask YES" >> $(PKGTOOLSINFO)
+	echo "LongFileNames YES" >> $(PKGTOOLSINFO)
+	/NextAdmin/Installer.app/package $(PKGTOOLSROOT)/ $(PKGTOOLSINFO)
+	-chmod 444 $(PKGTOOLS)/StepSSHTools.sizes
+	rm -rf $(PKGTOOLSROOT) $(PKGTOOLSINFO)
+	@echo "built $(PKGAPP) and $(PKGTOOLS) via the real Installer.app/package tool"
 
 pkg: all tools pkg-assemble
 
@@ -280,4 +304,4 @@ install-fat: clean
 
 clean:
 	rm -f core/*.o term/*.o app/*.o tools/*.o
-	rm -rf build $(APP) $(PKG) $(PKGROOT) $(PKGINFO)
+	rm -rf build $(APP) $(PKGAPP) $(PKGAPPROOT) $(PKGAPPINFO) $(PKGTOOLS) $(PKGTOOLSROOT) $(PKGTOOLSINFO)
