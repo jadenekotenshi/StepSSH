@@ -3,6 +3,7 @@
 #import "SFTPBrowser.h"
 #import "PortForward.h"
 #import "PortForwardController.h"
+#import "DebugLogController.h"
 #include "knownhosts.h"
 #include "rng.h"
 #include <string.h>
@@ -72,6 +73,7 @@ typedef socklen_t sock_len_t;
 - (BOOL)findTunnelForChannel:(int)ch tunnel:(PortTunnel **)outT forward:(PortForward **)outPF;
 - (void)handleForwardEvent:(ssh_event *)ev tunnel:(PortTunnel *)t forward:(PortForward *)pf;
 - (void)stopAllForwards;
+- (void)dbg:(NSString *)line;
 @end
 
 /* strdup() is not ANSI C; keep the dependency out of the app. */
@@ -128,12 +130,29 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     sb_free(&pendingIn);
     [host release]; [user release]; [keyPath release]; [knownHostsPath release];
     [window release]; [termView release]; [scroller release]; [browser release];
-    [forwards release]; [forwardController release];
+    [forwards release]; [forwardController release]; [debugLog release];
     [super dealloc];
 }
 
 - (NSWindow *)window { return window; }
 - (BOOL)isActive { return state != SESS_ENDED && state != 0; }
+
+/* ---------------------------------------------------------------- */
+/* verbose/troubleshooting log                                      */
+
+- (void)setVerbose:(BOOL)flag { verbose = flag ? 1 : 0; }
+- (DebugLogController *)debugLogController { return debugLog; }
+
+/* Not closed automatically when the session ends (unlike the file browser/port forwarding
+ * windows): its whole point is to keep showing what happened after the connection is gone. */
+- (void)debugLogControllerClosed:(id)dlc
+{
+    if (dlc != debugLog) return;
+    [debugLog autorelease];                                           /* we are inside its windowWillClose: */
+    debugLog = nil;
+}
+
+- (void)dbg:(NSString *)line { if (verbose && debugLog) [debugLog appendLine:line]; }
 
 /* ---------------------------------------------------------------- */
 /* window                                                           */
@@ -209,6 +228,12 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     [self loadKey];
     ssh = ssh_new([user cString]);
     if (!ssh) { [self endWithMessage:@"out of memory"]; return; }
+    if (verbose) {
+        ssh_set_verbose(ssh, 1);
+        debugLog = [[DebugLogController alloc] initWithSession:self];
+        [debugLog show];
+        [self dbg:[NSString stringWithFormat:@"Connecting to %@ port %d as %@ ...", host, port, user]];
+    }
     timer = [[NSTimer scheduledTimerWithTimeInterval:TICK_SECONDS target:self
                                             selector:@selector(tick:) userInfo:nil repeats:YES] retain];
     [self beginConnect];
@@ -427,6 +452,8 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
             [self handleKbdInt];
             break;
         case SSH_EV_AUTH_OK:
+            [self dbg:[NSString stringWithFormat:@"Authenticated. kex=%s cipher=%s mac=%s server=%s",
+                       ssh_kex_name(ssh), ssh_cipher_name(ssh), ssh_mac_name(ssh), ssh_server_version(ssh)]];
             state = SESS_ACTIVE;
             channel = ssh_channel_open_session(ssh);
             if (channel < 0) [self endWithMessage:@"Cannot open a session channel"];
@@ -462,6 +489,9 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
         case SSH_EV_ERROR:
             [self endWithMessage:[NSString stringWithFormat:@"Error: %s", ev.text]];
             break;
+        case SSH_EV_TRACE:
+            [self dbg:[NSString stringWithFormat:@"Server debug: %s", ev.text]];
+            break;
         default:
             break;
         }
@@ -475,6 +505,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     int r = kh_check([knownHostsPath cString], [host cString], port, ev->data, ev->len);
     int ans;
 
+    [self dbg:[NSString stringWithFormat:@"Host key: %@ %@", type, fp]];
     if (r == KH_MATCH) { ssh_hostkey_accept(ssh, 1); return; }
 
     if (r == KH_UNKNOWN) {
@@ -505,6 +536,7 @@ New fingerprint:\n%@",
     char *pw;
     NSString *prompt;
 
+    [self dbg:[NSString stringWithFormat:@"Auth methods offered: %s%@", methods, failed ? @" (previous attempt failed)" : @""]];
     if (failed) {
         if (code == 2) [self status:[NSString stringWithFormat:@"Server wants a new password: %s", text]];
         else [self status:@"Authentication failed."];
@@ -578,6 +610,7 @@ New fingerprint:\n%@",
     if (state == SESS_ENDED) return;
     state = SESS_ENDED;
     [self status:msg];
+    [self dbg:[NSString stringWithFormat:@"Ended: %@", msg]];
     [timer invalidate];
     [timer release];
     timer = nil;

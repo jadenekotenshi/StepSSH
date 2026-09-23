@@ -35,7 +35,9 @@ enum {
     SSH_EV_CHAN_CLOSE,     /* channel fully closed; id is now free */
     SSH_EV_CHAN_EXIT,      /* code = remote exit status (or 128+signal) */
     SSH_EV_DISCONNECT,     /* peer disconnected; text = its message */
-    SSH_EV_ERROR           /* fatal local error; text = description. Session is dead. */
+    SSH_EV_ERROR,          /* fatal local error; text = description. Session is dead. */
+    SSH_EV_TRACE           /* verbose-mode only (see ssh_set_verbose()): text = a diagnostic line,
+                              currently just the server's own SSH_MSG_DEBUG text. */
 };
 
 typedef struct {
@@ -70,6 +72,9 @@ int          ssh_is_authenticated(const ssh_session *s);
 void         ssh_disconnect(ssh_session *s, const char *msg);
 /* Send an SSH_MSG_IGNORE (keepalive / traffic padding). */
 void         ssh_send_ignore(ssh_session *s);
+/* Off by default. On: the server's own SSH_MSG_DEBUG text is surfaced as SSH_EV_TRACE events
+ * instead of being silently discarded -- for a troubleshooting/verbose-logging UI. */
+void         ssh_set_verbose(ssh_session *s, int on);
 
 /* ---- host key ---- */
 void         ssh_hostkey_accept(ssh_session *s, int accept);

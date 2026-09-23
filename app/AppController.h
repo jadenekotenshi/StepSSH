@@ -21,7 +21,8 @@
 - (void)showAbout:(id)sender;
 - (void)generateKey:(id)sender;
 - (void)keyGenerated:(NSString *)privateKeyPath;
-- (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key openBrowser:(BOOL)browser;
+- (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key
+                 openBrowser:(BOOL)browser verbose:(BOOL)verbose;
 - (void)openFileBrowser:(id)sender;
 - (void)openPortForwarding:(id)sender;
 - (void)sessionDidEnd:(SSHSession *)session;

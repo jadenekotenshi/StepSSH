@@ -9,6 +9,7 @@
 #import "SSHSession.h"
 #import "TerminalView.h"
 #import "SFTPBrowser.h"
+#import "DebugLogController.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -356,6 +357,51 @@ int main(int argc, char *argv[])
             close(cfd3);
             [s removeForward:pf2];
         }
+    }
+
+    /* ---- verbose logging: a second, independent connection with setVerbose:YES before -start ---- */
+    {
+        Owner *vowner = [[Owner alloc] init];
+        SSHSession *vs = [[SSHSession alloc] initWithHost:@"127.0.0.1" port:atoi(argv[1])
+                                                       user:[NSString stringWithCString:argv[2]]
+                                                    keyPath:[NSString stringWithCString:argv[3]]
+                                             knownHostsPath:[NSString stringWithCString:argv[4]]
+                                                      owner:vowner];
+        TerminalView *vtv;
+        DebugLogController *dlc;
+        NSString *log;
+
+        [vs setVerbose:YES];
+        [vs start];
+        vtv = find_terminal([vs window]);
+        EXPECT(vtv != nil, "a verbose session also builds a terminal window");
+
+        dlc = [vs debugLogController];
+        EXPECT(dlc != nil, "setVerbose:YES before -start creates the debug log window right away");
+
+        EXPECT(wait_for(vtv, @"Trying public key", 10), "a verbose session authenticates too");
+        { double w = 0; while (![vs isActive] && w < 5) { spin(0.05); w += 0.05; } }
+        spin(0.5);
+
+        log = [dlc logText];
+        EXPECT([log rangeOfString:@"Connecting to 127.0.0.1"].length > 0, "debug log records the initial connect line");
+        EXPECT([log rangeOfString:@"Host key:"].length > 0, "debug log records the host key");
+        EXPECT([log rangeOfString:@"Auth methods offered:"].length > 0, "debug log records the auth methods offered");
+        EXPECT([log rangeOfString:@"Authenticated. kex="].length > 0, "debug log records the negotiated algorithms");
+
+        [vs terminalView:vtv sendBytes:(const unsigned char *)"exit\r" length:5];
+        EXPECT(wait_for(vtv, @"Connection closed", 10), "a verbose session's remote exit is reported too");
+        log = [dlc logText];
+        EXPECT([log rangeOfString:@"Ended: Connection closed"].length > 0, "debug log records how the session ended");
+
+        [[vs window] close];
+        spin(0.2);
+        EXPECT([dlc window] != nil && [[dlc window] isVisible], "the debug log window stays open after the session's own window closes");
+        [[dlc window] close];
+        spin(0.2);
+        EXPECT([vs debugLogController] == nil, "closing the debug log window releases it");
+        [vs release];
+        [vowner release];
     }
 
     /* orderly exit */

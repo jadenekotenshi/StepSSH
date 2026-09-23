@@ -435,6 +435,11 @@ void ssh_send_ignore(ssh_session *s)
     ssh_send_packet(s, p, 5);
 }
 
+void ssh_set_verbose(ssh_session *s, int on)
+{
+    s->verbose = on ? 1 : 0;
+}
+
 /* Returns 1 with *payload set, 0 if more input is needed, -1 on a protocol error. */
 static int read_packet(ssh_session *s, const u8 **payload, size_t *plen)
 {
@@ -1163,8 +1168,24 @@ static int handle_packet(ssh_session *s, const u8 *pl, size_t len)
         return 0;
     }
     case M_IGNORE:
-    case M_DEBUG:
         return 0;
+    case M_DEBUG: {
+        size_t n;
+        const u8 *msg;
+        if (!s->verbose) return 0;
+        sr_u8(&r);                                 /* always_display: shown either way when verbose */
+        msg = sr_str(&r, &n);
+        if (!r.err) {
+            char *t = (char *)malloc(n + 1);
+            if (t) {
+                if (msg) memcpy(t, msg, n);
+                t[n] = '\0';
+                ssh_push_event(s, SSH_EV_TRACE, -1, NULL, 0, 0, 0, t, NULL);
+                free(t);
+            }
+        }
+        return 0;
+    }
     case M_UNIMPLEMENTED:
         return 0;
     case M_EXT_INFO: {

@@ -155,6 +155,7 @@ struct ssh_session {
     ssh_evnode *ev_head, *ev_tail, *ev_cur;
 
     int  started, closed, fatal;
+    int  verbose;                  /* see ssh_set_verbose() */
 };
 
 /* shared helpers (ssh.c) */

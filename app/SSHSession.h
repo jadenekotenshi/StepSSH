@@ -7,6 +7,7 @@
 @class SFTPBrowser;
 @class PortForward;
 @class PortForwardController;
+@class DebugLogController;
 
 enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
 
@@ -49,6 +50,11 @@ enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
     /* local port forwarding ("ssh -L"): any number of further channels, one per tunneled connection */
     NSMutableArray        *forwards;     /* PortForward* */
     PortForwardController *forwardController;
+
+    /* verbose/troubleshooting log: a window of connection diagnostics, shown automatically when
+     * verbose is set before -start (see the New Connection panel's "Verbose logging" checkbox) */
+    int                 verbose;
+    DebugLogController *debugLog;
 }
 - (id)initWithHost:(NSString *)h port:(int)p user:(NSString *)u keyPath:(NSString *)k
     knownHostsPath:(NSString *)kh owner:(id)o;
@@ -56,6 +62,12 @@ enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
 - (BOOL)isActive;
 - (void)shutdown;
 - (NSWindow *)window;
+
+/* verbose/troubleshooting log: call before -start (the New Connection panel does, from its
+ * "Verbose logging" checkbox) -- has no effect once the session is already connecting. */
+- (void)setVerbose:(BOOL)flag;
+- (DebugLogController *)debugLogController;
+- (void)debugLogControllerClosed:(id)dlc;
 
 /* file browser */
 - (void)setOpensBrowserOnLogin:(BOOL)flag;

@@ -6,7 +6,7 @@
     id                owner;
     NSPanel          *panel;
     NSTextField      *hostField, *portField, *userField, *keyField;
-    NSButton         *useKeyBox, *saveBox, *browserBox;
+    NSButton         *useKeyBox, *saveBox, *browserBox, *verboseBox;
     NSPopUpButton    *savedPopup;
     NSMutableArray   *profiles;                /* array of NSDictionary: host, port, user, key */
 }
@@ -20,5 +20,6 @@
 @end
 
 @interface NSObject (ConnectOwner)
-- (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key openBrowser:(BOOL)browser;
+- (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key
+                 openBrowser:(BOOL)browser verbose:(BOOL)verbose;
 @end

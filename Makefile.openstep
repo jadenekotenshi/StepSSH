@@ -40,7 +40,7 @@ CORE_OBJS = core/aes.o core/bcrypt.o core/bignum.o core/blowfish.o core/chacha.o
 TERM_OBJS = term/nsenc.o term/vt.o
 APP_OBJS  = app/AppController.o app/ConnectController.o app/KeyGenController.o \
             app/PromptPanel.o app/SFTPBrowser.o app/SSHSession.o app/SecretField.o app/TerminalView.o \
-            app/UIHelpers.o app/PortForward.o app/PortForwardController.o app/main.o
+            app/UIHelpers.o app/PortForward.o app/PortForwardController.o app/DebugLogController.o app/main.o
 
 .SUFFIXES: .c .m .o
 

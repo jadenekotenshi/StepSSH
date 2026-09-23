@@ -17,6 +17,7 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
 | Safety | known_hosts checking (plain, wildcard, hashed), strict-KEX (Terrapin) mitigation, refuses to run on a weak RNG |
 | Forwarding | local port forwarding ("ssh -L"), any number of rules, managed from *Connection > Port Forwarding...* while connected |
+| Verbose logging | "Verbose logging" in the New Connection panel opens a separate log window (host key, auth methods offered, negotiated algorithms, the server's own debug messages, how the session ended); see Verbose logging below |
 | Command line | `stepssh`, `stepssh-keygen`, `stepscp` -- OpenSSH-syntax-compatible CLI tools for scripts, alongside the GUI app; see Command-line tools below |
 
 **Not supported:** compression, *remote* port forwarding ("ssh -R") or dynamic/SOCKS forwarding ("ssh -D"
@@ -37,7 +38,7 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
   OpenSSL's, every key type and file format that `ssh-keygen` produces, the SFTP engine against an
   in-memory fake server (short reads, fragmented delivery, injected failures, cancellation, connection
   loss, hostile input), and the terminal emulator including a fuzz test.
-- `make interop` &mdash; 124 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
+- `make interop` &mdash; 126 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
   exchange method; RSA/ECDSA/ed25519 login keys and host keys; encrypted keys; keys written by the
   app's own generator (read back by the real `ssh-keygen`); 3 MB and 20 MB transfers in both
   directions through **dozens of re-keys** (including Diffie-Hellman and CBC re-keys mid-transfer);
@@ -46,7 +47,9 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
   cross-checked against the real `ssh-keygen`, single-file and recursive SFTP transfers).
 - `make session-smoke` &mdash; the real Objective-C `SSHSession` and file browser run against `sshd`
   (modern AppKit, PostScript calls stubbed): login, PTY, output, resize, browser open/close/reopen,
-  upload/download byte-for-byte.
+  upload/download byte-for-byte, port forwarding through a real tunnel, and verbose logging (host
+  key, auth methods offered, negotiated algorithms, and how the session ended, all recorded in a
+  separate log window that outlives the session).
 - `make ui-smoke`, `make lint`, `make check-objc`.
 
 **Confirmed on OPENSTEP 4.2** (86Box, Pentium II/400, reported by the author): `make -f Makefile.openstep
@@ -333,6 +336,23 @@ categorically refuses (every unsolicited `CHANNEL_OPEN` gets an "administrativel
 on purpose: a client should not silently let a server open connections through it); dynamic forwarding
 would mean implementing a small SOCKS4/5 server. Both are plausible future additions on top of the same
 `direct-tcpip` machinery local forwarding already uses, just not attempted in this pass.
+
+## Verbose logging
+
+**UNVERIFIED on real OPENSTEP hardware** -- built and tested against a real `sshd` via
+`make session-smoke` (host-compiled, real `SSHSession`/`DebugLogController`, see below), but not
+yet run on the real machine.
+
+"Verbose logging (for troubleshooting)" in the New Connection panel opens a second window
+alongside the terminal, right when the connection starts: the host key and its fingerprint, which
+auth methods the server offers (and whether the previous attempt failed), the negotiated key
+exchange/host key/cipher/MAC algorithms once authenticated, the server's own `SSH_MSG_DEBUG` text
+if it sends any (previously silently discarded; `core/ssh.c` only parses and surfaces it as a new
+`SSH_EV_TRACE` event when a session has asked for verbose mode, via `ssh_set_verbose()` -- off has
+zero effect on behavior, matching this codebase's spirit of not paying for what you don't use), and
+how the session eventually ended. Unlike the file browser and port forwarding windows, closing the
+terminal window does not close this one: its whole point is to keep showing what happened after the
+connection is gone, until you close it yourself.
 
 ## Command-line tools
 

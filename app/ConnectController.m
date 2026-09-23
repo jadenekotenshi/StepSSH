@@ -89,6 +89,10 @@
     [browserBox retain];
     [c addSubview:browserBox];
 
+    verboseBox = ui_switch(@"Verbose logging (for troubleshooting)", NSMakeRect(14, 50, 392, 22));
+    [verboseBox retain];
+    [c addSubview:verboseBox];
+
     connectBtn = [[[NSButton alloc] initWithFrame:NSMakeRect(328, 16, 78, 30)] autorelease];
     [connectBtn setTitle:@"Connect"];
     [connectBtn setTarget:self];
@@ -196,7 +200,9 @@
         [self reloadSaved];
     }
     [panel orderOut:nil];
-    [owner openSessionWithHost:h port:p user:u keyPath:k openBrowser:([browserBox state] ? YES : NO)];
+    [owner openSessionWithHost:h port:p user:u keyPath:k
+                    openBrowser:([browserBox state] ? YES : NO)
+                        verbose:([verboseBox state] ? YES : NO)];
 }
 
 @end

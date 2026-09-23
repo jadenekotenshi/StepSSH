@@ -226,11 +226,13 @@
     [self newConnection:nil];
 }
 
-- (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key openBrowser:(BOOL)browser
+- (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key
+                 openBrowser:(BOOL)browser verbose:(BOOL)verbose
 {
     SSHSession *s = [[SSHSession alloc] initWithHost:host port:port user:user keyPath:key
                                       knownHostsPath:knownHostsPath owner:self];
     [s setOpensBrowserOnLogin:browser];
+    [s setVerbose:verbose];
     [sessions addObject:s];
     [s release];
     [s start];
