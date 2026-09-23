@@ -303,12 +303,13 @@ dist-fat: pkg-fat
 #   make -f Makefile.openstep install-fat  # fat app + fat tools into /LocalApps, /usr/local/bin
 #   make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different arch set
 #
-# UNVERIFIED beyond "it links and lipo reports the right slices": this codebase has so far only
-# ever run on i386 (86Box). Nothing here confirms the m68k or sparc slices actually execute --
-# LOAD32_BE/STORE32_BE etc. (ssh_types.h) mean the C core never assumes a byte order, but that is
-# a design intent, not a proof, and the AppKit/Objective-C layer is completely untested on either
-# architecture. Report back exactly what `fat`/`fat-check` print, and separately, what happens if
-# you actually get the m68k or sparc slice running on real or emulated hardware.
+# CONFIRMED on m68k: running on a Previous-emulated 68040, the m68k slice starts up, seeds its RNG,
+# and makes a real SSH connection successfully (slow, as expected for real crypto on an emulated
+# 68040, but correct) -- LOAD32_BE/STORE32_BE etc. (ssh_types.h) meant the C core never assumed a
+# byte order, and this is that design intent actually holding up on real big-endian hardware, not
+# just link-time evidence. The AppKit/Objective-C layer is confirmed working there too (the app
+# runs its GUI, prompts for mouse-movement entropy, and connects out). sparc remains unconfirmed --
+# report back if you get that slice running on real or emulated hardware.
 FATARCHS = -arch i386 -arch m68k -arch sparc
 
 fat-check:

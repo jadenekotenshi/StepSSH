@@ -231,11 +231,14 @@ make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different a
 ```
 
 `fat`/`fat-tools`/`install-fat` all `clean` first, so a fat build never links against thin
-(single-architecture) object files left over from a previous plain build. UNVERIFIED beyond "it
-links and `lipo -info` reports the right slices": nothing here confirms the m68k or sparc slices
-actually *execute* -- `LOAD32_BE`/`STORE32_BE` etc. (`core/ssh_types.h`) mean the C core never
-assumes a byte order, but that is a design intent, not a proof, and the AppKit/Objective-C layer
-is untested on either architecture.
+(single-architecture) object files left over from a previous plain build.
+
+**Confirmed on m68k**: running on a Previous-emulated 68040, the m68k slice starts up, seeds its
+RNG, runs its GUI (including the mouse-movement entropy prompt), and makes a real SSH connection
+successfully -- slow, as expected for real crypto on an emulated 68040, but correct.
+`LOAD32_BE`/`STORE32_BE` etc. (`core/ssh_types.h`) meant the C core never assumed a byte order,
+and this is that design intent actually holding up on real big-endian hardware, not just link-time
+evidence. sparc remains unconfirmed.
 
 Run the app from a Terminal to see its startup messages (they begin `StepSSH:`):
 
