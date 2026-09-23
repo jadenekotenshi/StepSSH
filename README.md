@@ -164,24 +164,40 @@ StepSSH.sizes` on double-click turned out to be a one-off Installer.app glitch, 
 running it attached to a terminal instead opened it fine, and double-click worked from then on.
 
 That version *opened* successfully but failed to *install*, with `directory checksum error (0 !=
-2402)`. That pointed at something set aside earlier: it used a single package with `DefaultLocation
-/` and the payload split across two disconnected top-level directories (`LocalApps` and `usr`) --
-a structure with no precedent in anything confirmed working (the HOWTO's own example and
-OpenWrite.pkg both use one `DefaultLocation` with the whole payload relative to just that
-directory, and `OpenWrite_2.1/Packages/` itself ships as three separate single-purpose `.pkg`
-files rather than one combined one). Split into the two packages described above, each with its
-own single `DefaultLocation` -- but that alone didn't fix it either: same `directory checksum
-error (0 != 2402)` on both packages, even structurally unremarkable now, and the `.bom` itself
-(inspected with `lsbom(8)`, confirmed to exist per the real OPENSTEP 4.2 `bom(5)`/`lsbom(8)` man
-pages) looked completely well-formed. Found by diffing that `lsbom` output against a known-good
-package's, entry for entry: every directory entry in both `.bom`'s has group `0`, except
-`OpenWrite.bom`'s very own top-level `.` entry, which is `-2` (the classic BSD "nogroup" sentinel)
--- `StepSSH.bom`'s `.` was a plain `0`, like everything else. Confirmed `nogroup` exists as a real
-group on the machine, then `chgrp`'d each fake root to it before running `package`, so `package`/
-`mkbom` records the same `-2` for `.` that a real, known-working package does -- reasoned from a
-concrete, observed structural difference, but the actual mechanism (why `-2` vs `0` matters to
-Installer's directory-checksum check) is still not understood, just matched. **Not yet confirmed
-on real hardware.**
+N)` -- a different `N` each time, consistent with a real, content-derived checksum on the
+"expected" side and something failing hard on the "actual" side, every time. Ruled out one at a
+time, each a concrete, real difference from `OpenWrite.pkg` that turned out not to be the cause:
+splitting the single `DefaultLocation "/"` package (spanning two disconnected top-level
+directories, unlike anything confirmed working -- the HOWTO's own example and `OpenWrite.pkg` both
+use one `DefaultLocation` with the whole payload relative to just that directory, and
+`OpenWrite_2.1/Packages/` itself ships as three separate single-purpose `.pkg` files rather than
+one combined one) into `StepSSH.pkg` + `StepSSHTools.pkg`, each single-`DefaultLocation`; and
+`chgrp`ing each fake root to `nogroup` so `.`'s bom entry gets group `-2` like `OpenWrite.bom`'s
+does instead of a plain `0` (found via `lsbom(8)`, confirmed to exist per the real OPENSTEP 4.2
+`bom(5)`/`lsbom(8)` man pages -- both kept, since they're genuine, harmless matches to a
+known-working package's structure, even though neither turned out to be the actual cause).
+
+**The actual cause**: Installer.app doesn't extract packages with the `tar` on `$PATH`, or even
+with `/NextAdmin/Installer.app/installer_tar` (a bundled tar that, red herring, was never being
+invoked at all) -- found by wrapping the real binary in a logging shell script (temporarily
+renaming it and replacing it with a script that logs `argv` then execs the original), which showed
+Installer.app actually runs `/NextAdmin/Installer.app/installer_bigtar`. Manually reproduced with
+`installer_bigtar xpfT - StepSSH.bom` (matching the logged invocation, piped decompressed archive
+on stdin) -- and separately confirmed piping vs. a real seekable file made no difference, ruling
+that variable out too. `installer_bigtar` chokes on our archive but not `OpenWrite`'s;
+`installer_tar` (the never-invoked one) handles ours fine. The deciding factor: which of the two
+Installer.app invokes is selected by the `.info` file's own `LongFileNames` field -- `YES` routes
+to `installer_bigtar`, `NO` to `installer_tar`. This had `LongFileNames YES` (copied from
+`OpenWrite.info` without thinking about why it was there), despite neither package actually having
+any path anywhere near the 100-character ustar limit -- `LongFileNames NO` is not just a
+workaround but the factually correct value for both of these specific payloads, and switches
+Installer.app onto `installer_tar`, which extracts them both without error. `installer_bigtar`'s
+own bug (something it does wrong specifically for small/simple archives, unlike OpenWrite's real,
+complex, many-file one) is still not understood beyond that -- but StepSSH's packages have no
+reason to ever need it.
+
+**Confirmed on real OPENSTEP 4.2 hardware**: both `pkg` and `pkg-fat` build a `StepSSH.pkg` and
+`StepSSHTools.pkg` that Installer.app installs correctly.
 
 #### Distributing the packages
 

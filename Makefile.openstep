@@ -183,32 +183,39 @@ install: all tools
 # Installer.app itself, not the package: running it attached to a terminal instead of double-clicking
 # (`/NextAdmin/Installer.app/Installer StepSSH.pkg`) opened it successfully, and after that,
 # double-clicking from Workspace Manager did too, but *installing* it then failed with "directory
-# checksum error (0 != 2402)". That pointed back at something set aside earlier: DefaultLocation "/"
-# with the payload split across two disconnected top-level directories (LocalApps and usr) has no
-# precedent in anything confirmed working here -- the HOWTO's own diff.pkg example and OpenWrite.pkg
-# both use a single DefaultLocation with the whole payload relative to just that one directory, and
-# OpenWrite_2.1/Packages/ itself ships as three separate single-purpose .pkg files rather than one
-# combined one. A 0-vs-nonzero directory checksum is consistent with `package` checksumming
-# DefaultLocation's *real* directory (which, for literal "/", is the whole live filesystem, nothing
-# like the fake root's sparse two-entry version it was built from) rather than the fake root. Split
-# into two packages, each with its own single DefaultLocation matching the confirmed pattern -- but
-# that alone didn't fix it either: same "directory checksum error (0 != 2402)" on both packages,
-# even with each one now DefaultLocation-single and structurally unremarkable, and the .bom itself
-# (inspected with lsbom(8), confirmed to exist per bom(5)/lsbom(8)'s real OPENSTEP 4.2 man pages)
-# looked completely well-formed. Found by diffing that lsbom output against OpenWrite.bom's, entry
-# for entry: every directory entry in both boms has group 0, except OpenWrite.bom's very own top-
-# level "." entry, which is group -2 (the classic BSD "nogroup" sentinel) -- StepSSH.bom's "." was
-# a plain 0, like everything else. Confirmed `nogroup` exists as a real group on this machine, then
-# chgrp'd each fake root to it before running `package`, so `package`/`mkbom` records the same -2
-# for "." that a real, known-working package does -- reasoned from a concrete, observed structural
-# difference, but the actual mechanism (why -2 vs 0 matters to Installer's directory-checksum
-# check) is still not understood, just matched.
+# checksum error (0 != N)" for a different N each time -- consistent with a real, content-derived
+# checksum on the "expected" side and something failing hard on the "actual" side, every time.
+# Ruled out one at a time, each a concrete, real difference from OpenWrite.pkg that turned out not
+# to be the cause: splitting the single DefaultLocation-"/" package (spanning two disconnected top-
+# level directories, unlike anything confirmed working) into StepSSH.pkg + StepSSHTools.pkg, each
+# single-DefaultLocation; and chgrp'ing each fake root to `nogroup` so `.`'s bom entry gets group -2
+# like OpenWrite.bom's does instead of a plain 0 (found via lsbom(8), confirmed to exist per the real
+# OPENSTEP 4.2 bom(5)/lsbom(8) man pages -- both kept, since they're genuine, harmless matches to a
+# known-working package's structure, even though neither turned out to be the actual cause).
+#
+# The actual cause: Installer.app doesn't extract packages with the `tar` on $PATH, or even with
+# /NextAdmin/Installer.app/installer_tar (a bundled tar that, red herring, was never being invoked
+# at all) -- found by wrapping the real binary in a logging shell script (temporarily renaming it
+# and replacing it with a script that logs argv then execs the original), which showed
+# Installer.app actually runs /NextAdmin/Installer.app/installer_bigtar. Manually reproduced with
+# `installer_bigtar xpfT - StepSSH.bom` (matching the logged invocation, piped decompressed archive
+# on stdin) -- and separately confirmed piping vs a real seekable file made no difference, ruling
+# that variable out too. installer_bigtar chokes on our archive but not OpenWrite's; installer_tar
+# (the never-invoked one) handles ours fine. The deciding factor: which of the two Installer.app
+# invokes is selected by the .info file's own LongFileNames field -- YES routes to installer_bigtar,
+# NO to installer_tar. This target had LongFileNames YES (copied from OpenWrite.info without
+# thinking about why it was there), despite neither package actually having any path anywhere near
+# the 100-character ustar limit -- LongFileNames NO is not just a workaround but the factually
+# correct value for both of these specific payloads, and switches Installer.app onto installer_tar,
+# which extracts them both without any error. installer_bigtar's own bug (something it does wrong
+# specifically for small/simple archives, unlike OpenWrite's real, complex, many-file one) is still
+# not understood beyond that -- but StepSSH's packages have no reason to ever need it.
+#
+# CONFIRMED on real OPENSTEP 4.2 hardware: both `pkg` and `pkg-fat` build a StepSSH.pkg and
+# StepSSHTools.pkg that Installer.app installs correctly.
 #
 #   make -f Makefile.openstep pkg          # StepSSH.pkg + StepSSHTools.pkg: thin, for Installer.app
 #   make -f Makefile.openstep pkg-fat      # same, but i386+m68k+sparc fat
-#
-# UNVERIFIED: not yet tested on a real machine. If it still fails, report back exactly what
-# happened, ideally with another lsbom diff.
 PKGAPP     = StepSSH.pkg
 PKGAPPROOT = pkgroot-app
 PKGAPPINFO = StepSSH.info
@@ -230,7 +237,7 @@ pkg-assemble:
 	echo "Relocatable YES" >> $(PKGAPPINFO)
 	echo "Application YES" >> $(PKGAPPINFO)
 	echo "UseUserMask YES" >> $(PKGAPPINFO)
-	echo "LongFileNames YES" >> $(PKGAPPINFO)
+	echo "LongFileNames NO" >> $(PKGAPPINFO)
 	/NextAdmin/Installer.app/package $(PKGAPPROOT)/ $(PKGAPPINFO)
 	-chmod 444 $(PKGAPP)/StepSSH.sizes
 	rm -rf $(PKGAPPROOT) $(PKGAPPINFO)
@@ -246,7 +253,7 @@ pkg-assemble:
 	echo "Relocatable YES" >> $(PKGTOOLSINFO)
 	echo "Application NO" >> $(PKGTOOLSINFO)
 	echo "UseUserMask YES" >> $(PKGTOOLSINFO)
-	echo "LongFileNames YES" >> $(PKGTOOLSINFO)
+	echo "LongFileNames NO" >> $(PKGTOOLSINFO)
 	/NextAdmin/Installer.app/package $(PKGTOOLSROOT)/ $(PKGTOOLSINFO)
 	-chmod 444 $(PKGTOOLS)/StepSSHTools.sizes
 	rm -rf $(PKGTOOLSROOT) $(PKGTOOLSINFO)
