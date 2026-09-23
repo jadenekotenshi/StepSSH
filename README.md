@@ -170,7 +170,18 @@ a structure with no precedent in anything confirmed working (the HOWTO's own exa
 OpenWrite.pkg both use one `DefaultLocation` with the whole payload relative to just that
 directory, and `OpenWrite_2.1/Packages/` itself ships as three separate single-purpose `.pkg`
 files rather than one combined one). Split into the two packages described above, each with its
-own single `DefaultLocation`. **Not yet confirmed on real hardware.**
+own single `DefaultLocation` -- but that alone didn't fix it either: same `directory checksum
+error (0 != 2402)` on both packages, even structurally unremarkable now, and the `.bom` itself
+(inspected with `lsbom(8)`, confirmed to exist per the real OPENSTEP 4.2 `bom(5)`/`lsbom(8)` man
+pages) looked completely well-formed. Found by diffing that `lsbom` output against a known-good
+package's, entry for entry: every directory entry in both `.bom`'s has group `0`, except
+`OpenWrite.bom`'s very own top-level `.` entry, which is `-2` (the classic BSD "nogroup" sentinel)
+-- `StepSSH.bom`'s `.` was a plain `0`, like everything else. Confirmed `nogroup` exists as a real
+group on the machine, then `chgrp`'d each fake root to it before running `package`, so `package`/
+`mkbom` records the same `-2` for `.` that a real, known-working package does -- reasoned from a
+concrete, observed structural difference, but the actual mechanism (why `-2` vs `0` matters to
+Installer's directory-checksum check) is still not understood, just matched. **Not yet confirmed
+on real hardware.**
 
 #### Distributing the packages
 

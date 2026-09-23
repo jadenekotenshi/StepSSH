@@ -191,14 +191,24 @@ install: all tools
 # combined one. A 0-vs-nonzero directory checksum is consistent with `package` checksumming
 # DefaultLocation's *real* directory (which, for literal "/", is the whole live filesystem, nothing
 # like the fake root's sparse two-entry version it was built from) rather than the fake root. Split
-# into two packages, each with its own single DefaultLocation matching the confirmed pattern.
+# into two packages, each with its own single DefaultLocation matching the confirmed pattern -- but
+# that alone didn't fix it either: same "directory checksum error (0 != 2402)" on both packages,
+# even with each one now DefaultLocation-single and structurally unremarkable, and the .bom itself
+# (inspected with lsbom(8), confirmed to exist per bom(5)/lsbom(8)'s real OPENSTEP 4.2 man pages)
+# looked completely well-formed. Found by diffing that lsbom output against OpenWrite.bom's, entry
+# for entry: every directory entry in both boms has group 0, except OpenWrite.bom's very own top-
+# level "." entry, which is group -2 (the classic BSD "nogroup" sentinel) -- StepSSH.bom's "." was
+# a plain 0, like everything else. Confirmed `nogroup` exists as a real group on this machine, then
+# chgrp'd each fake root to it before running `package`, so `package`/`mkbom` records the same -2
+# for "." that a real, known-working package does -- reasoned from a concrete, observed structural
+# difference, but the actual mechanism (why -2 vs 0 matters to Installer's directory-checksum
+# check) is still not understood, just matched.
 #
 #   make -f Makefile.openstep pkg          # StepSSH.pkg + StepSSHTools.pkg: thin, for Installer.app
 #   make -f Makefile.openstep pkg-fat      # same, but i386+m68k+sparc fat
 #
-# UNVERIFIED: this structural change is reasoned from converging evidence (the HOWTO example, the
-# OpenWrite.pkg reference, and the shape of this specific error), not from a real machine directly --
-# still needs testing. If it still fails, report back exactly what happened.
+# UNVERIFIED: not yet tested on a real machine. If it still fails, report back exactly what
+# happened, ideally with another lsbom diff.
 PKGAPP     = StepSSH.pkg
 PKGAPPROOT = pkgroot-app
 PKGAPPINFO = StepSSH.info
@@ -210,6 +220,7 @@ PKGTOOLSINFO = StepSSHTools.info
 pkg-assemble:
 	rm -rf $(PKGAPP) $(PKGAPPROOT) $(PKGAPPINFO) $(PKGTOOLS) $(PKGTOOLSROOT) $(PKGTOOLSINFO)
 	mkdir $(PKGAPPROOT)
+	chgrp nogroup $(PKGAPPROOT)
 	cp -r $(APP) $(PKGAPPROOT)/
 	echo "Title StepSSH" > $(PKGAPPINFO)
 	echo "Version $(VERSION)" >> $(PKGAPPINFO)
@@ -224,6 +235,7 @@ pkg-assemble:
 	-chmod 444 $(PKGAPP)/StepSSH.sizes
 	rm -rf $(PKGAPPROOT) $(PKGAPPINFO)
 	mkdir $(PKGTOOLSROOT)
+	chgrp nogroup $(PKGTOOLSROOT)
 	mkdir $(PKGTOOLSROOT)/bin
 	cp build/stepssh build/stepssh-keygen build/stepscp $(PKGTOOLSROOT)/bin/
 	echo "Title StepSSHTools" > $(PKGTOOLSINFO)
