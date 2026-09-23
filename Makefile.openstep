@@ -4,11 +4,13 @@
 #   make -f Makefile.openstep          # build StepSSH.app
 #   make -f Makefile.openstep tools    # build stepssh/stepssh-keygen/stepscp (build/, no AppKit)
 #   make -f Makefile.openstep install  # the above into /LocalApps and /usr/local/bin (see below)
-#   make -f Makefile.openstep pkg      # StepSSH.pkg for Installer.app (see below; confirmed working)
+#   make -f Makefile.openstep pkg      # StepSSH.pkg + StepSSHTools.pkg for Installer.app (see below)
+#   make -f Makefile.openstep dist     # both .pkg's, gzipped as StepSSH-<VERSION>-<letter>.tar.gz
 #   make -f Makefile.openstep fat      # StepSSH.app as an i386+m68k+sparc fat binary (see below)
 #   make -f Makefile.openstep fat-tools    # stepssh/stepssh-keygen/stepscp, fat, same arch set
 #   make -f Makefile.openstep install-fat  # fat app + fat tools into /LocalApps, /usr/local/bin
-#   make -f Makefile.openstep pkg-fat      # StepSSH.pkg with the fat app + fat tools
+#   make -f Makefile.openstep pkg-fat      # StepSSH.pkg + StepSSHTools.pkg with the fat build
+#   make -f Makefile.openstep dist-fat     # both fat .pkg's, gzipped as StepSSH-<VERSION>-NIS.tar.gz
 #   make -f Makefile.openstep clean
 #
 # No GNU-make features are used (no wildcard, no pattern rules) so the stock
@@ -245,6 +247,28 @@ pkg-fat: clean
 	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS)"
 	$(MAKE) -f Makefile.openstep pkg-assemble
 
+# ---- distributable archive of the .pkg's ----
+# Both packages, gzipped into one StepSSH-<VERSION>-<letter(s)>.tar.gz for handing out. The letter
+# convention (N=m68k, I=i386, S=sparc) matches "Making Packages I"'s own example naming
+# (diff-2.7-N.tar.gz, "N - NeXT hardware") -- NIS for `dist-fat` (all three, always, since that's
+# exactly what `fat`/`pkg-fat` build), or whichever single letter matches the machine `dist` (thin)
+# actually ran on, found with arch(1) (the classic NeXT/OPENSTEP command for exactly this -- the
+# same architecture names this Makefile's own `-arch` flags already use, so not a fresh guess).
+# UNVERIFIED: arch(1)'s exact output and its presence at that path are assumed, not confirmed here.
+dist: pkg
+	case "`arch`" in \
+	    m68k) suf=N ;; \
+	    i386) suf=I ;; \
+	    sparc) suf=S ;; \
+	    *) suf="`arch`" ;; \
+	esac; \
+	tar -cvf - $(PKGAPP) $(PKGTOOLS) | gzip -9c > StepSSH-$(VERSION)-$$suf.tar.gz; \
+	echo "built StepSSH-$(VERSION)-$$suf.tar.gz"
+
+dist-fat: pkg-fat
+	tar -cvf - $(PKGAPP) $(PKGTOOLS) | gzip -9c > StepSSH-$(VERSION)-NIS.tar.gz
+	@echo "built StepSSH-$(VERSION)-NIS.tar.gz"
+
 # ---- optional multi-architecture ("fat") build ----
 # NeXT's cc accepts several -arch flags in one invocation: each source is compiled once per
 # architecture and the per-arch object code is combined into one fat Mach-O file automatically,
@@ -305,3 +329,4 @@ install-fat: clean
 clean:
 	rm -f core/*.o term/*.o app/*.o tools/*.o
 	rm -rf build $(APP) $(PKGAPP) $(PKGAPPROOT) $(PKGAPPINFO) $(PKGTOOLS) $(PKGTOOLSROOT) $(PKGTOOLSINFO)
+	rm -f StepSSH-*.tar.gz

@@ -172,6 +172,21 @@ directory, and `OpenWrite_2.1/Packages/` itself ships as three separate single-p
 files rather than one combined one). Split into the two packages described above, each with its
 own single `DefaultLocation`. **Not yet confirmed on real hardware.**
 
+#### Distributing the packages
+
+```sh
+make -f Makefile.openstep dist         # StepSSH-<VERSION>-<letter>.tar.gz: thin
+make -f Makefile.openstep dist-fat     # StepSSH-<VERSION>-NIS.tar.gz: fat
+```
+
+Gzips both `.pkg`'s into one `StepSSH-<VERSION>-<letter(s)>.tar.gz`. The letter convention
+(`N`=m68k, `I`=i386, `S`=sparc) matches "Making Packages I"'s own example naming
+(`diff-2.7-N.tar.gz`, "N - NeXT hardware"): `NIS` for `dist-fat` (always, since that's exactly what
+`pkg-fat` builds), or whichever single letter matches the machine `dist` actually ran on, found
+with `arch(1)` -- the classic NeXT/OPENSTEP command for exactly this, using the same architecture
+names this Makefile's own `-arch` flags already do. **UNVERIFIED**: `arch(1)`'s exact output is
+assumed from that consistency, not confirmed on a real machine.
+
 ### Fat (multi-architecture) binaries
 
 **Confirmed working on real OPENSTEP 4.2 hardware**: `StepSSH.app` builds and links as a genuine
