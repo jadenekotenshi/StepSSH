@@ -4,7 +4,7 @@
 #   make -f Makefile.openstep          # build StepSSH.app
 #   make -f Makefile.openstep tools    # build stepssh/stepssh-keygen/stepscp (build/, no AppKit)
 #   make -f Makefile.openstep install  # the above into /LocalApps and /usr/local/bin (see below)
-#   make -f Makefile.openstep pkg      # StepSSH.pkg for Installer.app (see below; UNVERIFIED)
+#   make -f Makefile.openstep pkg      # StepSSH.pkg for Installer.app (see below; confirmed working)
 #   make -f Makefile.openstep fat      # StepSSH.app as an i386+m68k+sparc fat binary (see below)
 #   make -f Makefile.openstep fat-tools    # stepssh/stepssh-keygen/stepscp, fat, same arch set
 #   make -f Makefile.openstep install-fat  # fat app + fat tools into /LocalApps, /usr/local/bin
@@ -176,16 +176,17 @@ install: all tools
 # naively, in a way multiple consecutive spaces (rather than the single space every field in the
 # real OpenWrite.info example actually uses) breaks. Single-spaced now, matching that example
 # exactly instead of the more readable aligned columns. Next: DiskName was found, but Installer.app
-# then failed with "error opening StepSSH.sizes" -- `package` had left that one file mode 644 while
-# every other member (.info, .tar.Z, and OpenWrite.pkg's own .bom/.sizes/.tiff for comparison) was
-# 444. Not explained, just observed and matched: chmod it to 444 after `package` runs.
+# then failed with "error opening StepSSH.sizes" even with that file's permissions and byte-for-byte
+# content confirmed identical in shape to OpenWrite.sizes -- turned out to be a one-off problem with
+# Installer.app itself, not the package: running it attached to a terminal instead of double-clicking
+# (`/NextAdmin/Installer.app/Installer StepSSH.pkg`) opened it successfully, and after that,
+# double-clicking from Workspace Manager did too.
+#
+# CONFIRMED on real OPENSTEP 4.2 hardware: both `pkg` and `pkg-fat` build a StepSSH.pkg that
+# Installer.app opens and installs correctly, via `open` and via double-click in Workspace Manager.
 #
 #   make -f Makefile.openstep pkg          # StepSSH.pkg: thin app + tools, for Installer.app
 #   make -f Makefile.openstep pkg-fat      # same, but the app + tools are i386+m68k+sparc fat
-#
-# UNVERIFIED: still not confirmed that Installer.app accepts the result end to end. If it still
-# rejects something, send over `ls -la StepSSH.pkg` and whichever file it names, so the next fix
-# is against what's actually there instead of another guess.
 PKG     = StepSSH.pkg
 PKGROOT = pkgroot
 PKGINFO = StepSSH.info
@@ -211,7 +212,7 @@ pkg-assemble:
 	/NextAdmin/Installer.app/package $(PKGROOT)/ $(PKGINFO)
 	-chmod 444 $(PKG)/StepSSH.sizes
 	rm -rf $(PKGROOT) $(PKGINFO)
-	@echo "built $(PKG) via the real Installer.app/package tool -- still UNVERIFIED end to end, see this target's own comment above"
+	@echo "built $(PKG) via the real Installer.app/package tool"
 
 pkg: all tools pkg-assemble
 

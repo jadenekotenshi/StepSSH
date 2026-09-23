@@ -164,7 +164,12 @@ Single-spaced now, matching that example exactly. DiskName was then found, but I
 one step later with `error opening StepSSH.sizes` -- `package` had left that one file mode 644
 while every other member (`.info`, `.tar.Z`, and OpenWrite.pkg's own `.bom`/`.sizes`/`.tiff` for
 comparison) was 444. Not explained, just observed and matched: `chmod 444` it after `package` runs.
-**Still UNVERIFIED end to end.**
+That still didn't fix it -- turned out to be a one-off problem with Installer.app itself, not the
+package: running it attached to a terminal (`/NextAdmin/Installer.app/Installer StepSSH.pkg`)
+instead of double-clicking opened it successfully, and after that, double-clicking did too.
+
+**Confirmed on real OPENSTEP 4.2 hardware**: both `pkg` and `pkg-fat` build a `StepSSH.pkg` that
+Installer.app opens and installs correctly, via `open` and via double-click in Workspace Manager.
 
 ### Fat (multi-architecture) binaries
 
