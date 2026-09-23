@@ -17,7 +17,7 @@
 #include "ecc.h"
 #include "dh_tab.h"
 
-#define CLIENT_VERSION "SSH-2.0-StepSSH_0.2"
+#define CLIENT_VERSION "SSH-2.0-StepSSH_1.0"
 
 /* Key exchange methods, in the order we prefer them.  Modern first; the SHA-1 group is a last resort
  * for old servers.  (diffie-hellman-group1-sha1, 1024 bits, is deliberately not offered.) */

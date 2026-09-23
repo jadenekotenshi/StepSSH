@@ -24,7 +24,7 @@ CFLAGS   = $(OPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 LIBS     = -framework AppKit -framework Foundation
 APP      = StepSSH.app
 # Keep in step with core/ssh.c's CLIENT_VERSION.
-VERSION  = 0.2.0
+VERSION  = 1.0.0
 
 # Workspace takes an application's icon (and its file-type table) from a read-only __ICON segment
 # linked into the executable, not from a file in the .app folder (compare /NextApps/Edit.app, whose
