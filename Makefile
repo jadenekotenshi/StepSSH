@@ -156,6 +156,19 @@ session-smoke:
 	$(CC) build/ss_*.o -framework Cocoa -o build/session_smoke
 	sh tests/session_smoke.sh
 
+# Real X11 forwarding end to end: a real local sshd (X11Forwarding yes) + two real Xvfb X
+# servers (XQuartz, /opt/X11/bin) -- see the test file's own header for why this, not a mock, is
+# the only real proof the cookie-substitution logic is byte-correct. Skips itself (exit 0) if
+# XQuartz isn't installed, so it never becomes a hard dependency of `make test`/`session-smoke`.
+x11-smoke:
+	mkdir -p build
+	for f in tests/x11_smoke.m $(UI_SRC); do \
+	  $(CC) -c -x objective-c -fno-objc-arc -w -g -Icore -Iterm -Iapp $$f -o build/xs_$$(basename $$f .m).o || exit 1; \
+	done
+	for f in core/*.c term/*.c; do $(CC) -c -w -g -Icore -Iterm $$f -o build/xs_c_$$(basename $$f .c).o || exit 1; done
+	$(CC) build/xs_*.o -framework Cocoa -o build/x11_smoke
+	sh tests/x11_smoke.sh
+
 clean:
 	rm -rf build build-san
 

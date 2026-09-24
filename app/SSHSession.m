@@ -981,13 +981,25 @@ New fingerprint:\n%@",
     case SSH_EV_X11_OPEN: {
         /* A real X11 client on the remote side just triggered this -- dial out to the local
          * display the same way -beginConnect dials the SSH server itself: non-blocking connect(),
-         * polled to completion in -pumpX11. */
+         * polled to completion in -pumpX11.
+         *
+         * The tunnel is tracked in x11Tunnels from this point on, even on a path that gives up
+         * immediately (bad hostname, socket() failure, a hard connect failure) -- it must never
+         * call ssh_channel_close() for an untracked channel. -pumpX11's own close handshake
+         * relies on -handleX11Event:tunnel:'s SSH_EV_CHAN_CLOSE case to actually remove a tunnel
+         * once the server's own close comes back (which may arrive well after this event
+         * finishes); an untracked channel's eventual close event has nothing to match against in
+         * -processEvents' early dispatch, and falls through into the generic event switch below,
+         * which assumes any unmatched channel close is the main shell session ending. */
         struct sockaddr_in sa;
         unsigned long addr;
         struct hostent *he;
         const char *h = [x11DisplayHost cString];
         int flags, rc, nfd;
-        X11Tunnel *nt;
+        X11Tunnel *nt = [[[X11Tunnel alloc] init] autorelease];
+
+        nt->channel = ev->channel;
+        [x11Tunnels addObject:nt];
 
         memset(&sa, 0, sizeof(sa));
         sa.sin_family = AF_INET;
@@ -998,25 +1010,21 @@ New fingerprint:\n%@",
         } else {
             he = gethostbyname(h);
             if (!he || he->h_addrtype != AF_INET || he->h_length != 4) {
-                ssh_channel_close(ssh, ev->channel);
+                nt->localClosed = nt->remoteClosed = YES;      /* -pumpX11 sends the close request */
                 break;
             }
             memcpy(&sa.sin_addr, he->h_addr, 4);
         }
         nfd = socket(AF_INET, SOCK_STREAM, 0);
-        if (nfd < 0) { ssh_channel_close(ssh, ev->channel); break; }
+        if (nfd < 0) { nt->localClosed = nt->remoteClosed = YES; break; }
         flags = fcntl(nfd, F_GETFL, 0);
         fcntl(nfd, F_SETFL, flags | O_NONBLOCK);
         rc = connect(nfd, (struct sockaddr *)&sa, sizeof(sa));
 
-        nt = [[[X11Tunnel alloc] init] autorelease];
-        nt->localFD = nfd;
-        nt->channel = ev->channel;
         nt->connectDeadline = ticks + CONNECT_TIMEOUT * TICKS_PER_SEC;
-        if (rc == 0) nt->localOpen = YES;
-        else if (errno == EINPROGRESS) nt->connecting = YES;
-        else { close(nfd); ssh_channel_close(ssh, ev->channel); break; }
-        [x11Tunnels addObject:nt];
+        if (rc == 0) { nt->localFD = nfd; nt->localOpen = YES; }
+        else if (errno == EINPROGRESS) { nt->localFD = nfd; nt->connecting = YES; }
+        else { close(nfd); nt->localClosed = nt->remoteClosed = YES; }
         break;
     }
     case SSH_EV_CHAN_DATA:
@@ -1081,15 +1089,24 @@ New fingerprint:\n%@",
                 t->localClosed = YES;
             } else if (errno != EWOULDBLOCK && errno != EINTR) {
                 t->localClosed = YES;
-                if (t->channel >= 0) ssh_channel_close(ssh, t->channel);
+                if (t->channel >= 0 && !t->closeRequested) { t->closeRequested = YES; ssh_channel_close(ssh, t->channel); }
             }
         }
-        if (t->localClosed && t->remoteClosed && t->outToLocal.len == 0) {
-            if (t->channel >= 0) { ssh_channel_close(ssh, t->channel); t->channel = -1; }
-            if (t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
-            [x11Tunnels removeObjectAtIndex:i];
-            i--;
+        /* Sends our own half of the close handshake and drops the local socket once both sides
+         * are done -- but never touches t->channel or removes this tunnel from x11Tunnels here.
+         * ssh_channel_close() only sends our own CHANNEL_CLOSE; the core engine does not actually
+         * free the channel slot until the server's own CHANNEL_CLOSE comes back (RFC 4254), which
+         * may be queued synchronously as part of this very call or arrive on a later tick.
+         * Removing this tunnel now would leave that eventual SSH_EV_CHAN_CLOSE event unmatched by
+         * -findX11TunnelForChannel:, misrouting it into -processEvents' generic switch (which
+         * assumes an unmatched channel close is the main shell session ending) -- the real
+         * SSH_EV_CHAN_CLOSE case in -handleX11Event:tunnel: does the actual teardown once that
+         * event genuinely arrives. closeRequested guards against sending CHANNEL_CLOSE twice. */
+        if (t->localClosed && t->remoteClosed && t->outToLocal.len == 0 && !t->closeRequested) {
+            t->closeRequested = YES;
+            if (t->channel >= 0) ssh_channel_close(ssh, t->channel);
         }
+        if (t->closeRequested && t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
     }
     [self flushOutput];
 }

@@ -19,6 +19,8 @@
     BOOL     connecting;           /* non-blocking local connect() in flight (EINPROGRESS) */
     BOOL     localOpen;            /* local connect() succeeded; ok to relay */
     BOOL     localClosed, remoteClosed;
+    BOOL     closeRequested;       /* ssh_channel_close() already sent; waiting for SSH_EV_CHAN_CLOSE
+                                       to actually remove this tunnel -- see -pumpX11's own comment */
     unsigned connectDeadline;      /* in the owning session's own `ticks` units */
     sbuf     outToLocal;
 }

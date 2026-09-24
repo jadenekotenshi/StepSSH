@@ -16,12 +16,12 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), drag files/folders from Workspace's File Viewer onto the browser to upload, new folder, rename, delete |
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
 | Safety | known_hosts checking (plain, wildcard, hashed), strict-KEX (Terrapin) mitigation, refuses to run on a weak RNG |
-| Forwarding | local port forwarding ("ssh -L"), any number of rules, managed from *Connection > Port Forwarding...* while connected |
+| Forwarding | local port forwarding ("ssh -L"), any number of rules, managed from *Connection > Port Forwarding...* while connected; X11 forwarding ("Forward X11" in the New Connection panel), see X11 forwarding below |
 | Verbose logging | "Verbose logging" in the New Connection panel opens a separate log window (host key, auth methods offered, negotiated algorithms, the server's own debug messages, how the session ended); see Verbose logging below |
 | Command line | `stepssh`, `stepssh-keygen`, `stepscp` -- OpenSSH-syntax-compatible CLI tools for scripts, alongside the GUI app; see Command-line tools below |
 
 **Not supported:** compression, *remote* port forwarding ("ssh -R") or dynamic/SOCKS forwarding ("ssh -D"
--- see Port forwarding below), agent forwarding, X11, IPv6, middle-click (mouse reporting
+-- see Port forwarding below), agent forwarding, IPv6, middle-click (mouse reporting
 covers left/right and the wheel only -- see Mouse reporting below), dragging files *out* of the SFTP
 browser to download (see Drag-and-drop below), recursive folder *deletion* (only individual files and
 empty folders), RSA/ECDSA key
@@ -32,12 +32,16 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
 **Verified on the development Mac** (all also clean under AddressSanitizer + UBSan):
 
-- `make test` &mdash; 1663 checks: crypto against independent references (Python, `openssl`, OpenSSL's
+- `make test` &mdash; 1834 checks: crypto against independent references (Python, `openssl`, OpenSSL's
   own EVP API for AES-GCM, RFC/FIPS vectors), big-integer arithmetic against Python's own integers,
   elliptic curves against OpenSSL signatures and ECDH secrets, RSA signatures **byte-identical** to
   OpenSSL's, every key type and file format that `ssh-keygen` produces, the SFTP engine against an
   in-memory fake server (short reads, fragmented delivery, injected failures, cancellation, connection
-  loss, hostile input), and the terminal emulator including a fuzz test.
+  loss, hostile input), the terminal emulator including a fuzz test, X11's `ConnectionSetup` cookie
+  rewriter against hand-built vectors (whole and byte-at-a-time delivery, hostile input), and the
+  server-initiated `"x11"` channel accept path exercised through the public `ssh.h` API (exact
+  `x11-req` wire format, cookie substitution, channel-slot exhaustion, every other server-initiated
+  channel type still refused exactly as before).
 - `make interop` &mdash; 126 checks against a real OpenSSH 10.3 `sshd`: every cipher x MAC; every key
   exchange method; RSA/ECDSA/ed25519 login keys and host keys; encrypted keys; keys written by the
   app's own generator (read back by the real `ssh-keygen`); 3 MB and 20 MB transfers in both
@@ -50,6 +54,15 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
   upload/download byte-for-byte, port forwarding through a real tunnel, and verbose logging (host
   key, auth methods offered, negotiated algorithms, and how the session ended, all recorded in a
   separate log window that outlives the session).
+- `make x11-smoke` (needs XQuartz -- `Xvfb`/`xauth`/`xdpyinfo` at `/opt/X11/bin`; skips itself,
+  exit 0, if that isn't installed) &mdash; the real `SSHSession` against a real local `sshd`
+  (`X11Forwarding yes`) and two real Xvfb X servers: a real `xdpyinfo` run through the forward
+  reaches a cookie-authenticated display with the right cookie configured, is correctly refused by
+  that same real X server with a deliberately wrong one (and the session keeps working
+  afterward -- this specific check caught a real bug during development: closing a forwarded
+  channel's own tracking object before the server's confirming `CHANNEL_CLOSE` actually arrived
+  let that later event fall through into the code that ends the whole session, not just the one
+  channel), and reaches a second display configured with no authentication at all.
 - `make ui-smoke`, `make lint`, `make check-objc`.
 
 **Confirmed on OPENSTEP 4.2** (86Box, Pentium II/400, reported by the author): `make -f Makefile.openstep
@@ -331,11 +344,44 @@ those becomes its own SSH channel (`direct-tcpip`, RFC 4254 s.7.2) on the same c
 the terminal and file browser's channels.
 
 **Not implemented: remote forwarding (`ssh -R`) or dynamic/SOCKS forwarding (`ssh -D`).** Remote
-forwarding would mean accepting a server-initiated channel open, which this client's connection layer
-categorically refuses (every unsolicited `CHANNEL_OPEN` gets an "administratively prohibited" refusal,
-on purpose: a client should not silently let a server open connections through it); dynamic forwarding
-would mean implementing a small SOCKS4/5 server. Both are plausible future additions on top of the same
-`direct-tcpip` machinery local forwarding already uses, just not attempted in this pass.
+forwarding would mean accepting a server-initiated channel open; this client's connection layer
+refuses every unsolicited `CHANNEL_OPEN` with an "administratively prohibited" reason *except* one
+narrow, deliberate exception -- `"x11"`, and only once this session has actually asked for it (see
+X11 forwarding below) -- a client should not otherwise silently let a server open connections
+through it. Dynamic forwarding would mean implementing a small SOCKS4/5 server. Both remain
+plausible future additions on top of the same `direct-tcpip` machinery local forwarding already
+uses, just not attempted in this pass.
+
+## X11 forwarding
+
+**Not yet confirmed on real OPENSTEP 4.2 hardware** -- built and tested end to end on the
+development host against real local `sshd` (`X11Forwarding yes`) and real Xvfb X servers (see
+`make x11-smoke` below), including a real X server's own rejection of a wrong cookie, relayed back
+correctly without disturbing the rest of the session, but not yet run on the real machine against
+the user's own X server.
+
+"Forward X11" in the New Connection panel, plus a Display host:port (defaulting to `127.0.0.1:6000`)
+and an optional hex Cookie, turns on `ssh -X`-style forwarding: an `x11-req` (RFC 4254 s.6.3.1) on
+the session channel advertises a random cookie generated just for this connection, and every
+server-initiated `"x11"` channel that follows -- one per X11 client the remote session runs -- gets
+relayed to a real local X server at the configured host:port, the same way `-L`'s own tunnels
+relay to a remote host:port just dialed in the opposite direction. OPENSTEP itself has no native
+X11 support, so this is for a *separate* X server reachable from wherever StepSSH itself runs (on
+the same machine, or elsewhere on the network) -- not something OPENSTEP's own window system can
+display directly.
+
+The one piece of real protocol work X11 forwarding needs beyond relaying bytes: the fake cookie
+this client advertises via `x11-req` means nothing to the real X server the connection is
+ultimately headed to, so `core/x11.c` rewrites it in place, once, in the very first data each new
+`"x11"` channel carries (the X11 protocol's own `ConnectionSetup` request) -- substituting in
+either the real cookie configured in the Display row, or (if none is set) truncating the request
+to present no authentication at all, leaving the real display's own access control to decide.
+Not implemented: the X SECURITY extension's own untrusted-cookie generation (OpenSSH's `-X` vs.
+`-Y` distinction) -- this client always behaves like `-Y` in that specific sense, trusting
+whatever cookie (or lack of one) is configured, rather than negotiating a time-limited, more
+restricted one with the real X server itself. A channel whose `ConnectionSetup` does not match
+what was actually advertised via `x11-req` is refused and closed on its own, never taking down the
+rest of the session.
 
 ## Verbose logging
 
@@ -470,11 +516,12 @@ core/   SSH engine. Pure C89, no I/O: feed it bytes, drain its output and events
   ssh.c ssh_auth.c ssh_chan.c                          transport + key exchange, auth, channels
   ssh_key                                              key parsing (OpenSSH/PEM/PKCS#8), signing, host-key verification
   sftp                                                 SFTP v3 client: protocol, listing, pipelined transfers
+  x11                                                   X11 ConnectionSetup cookie rewriter (see X11 forwarding)
   knownhosts oscompat
 term/   vt.c (terminal emulator core), nsenc.c (NeXTSTEP <-> Unicode)
 app/    Objective-C, all UI built in code (no nibs):
         AppController ConnectController KeyGenController SSHSession SFTPBrowser
-        PortForward PortForwardController
+        PortForward PortForwardController X11Tunnel
         TerminalView PromptPanel SecretField UIHelpers Compat.h main.m
         StepSSH.iconheader, StepSSH.tiff   the application icon (linked in as __ICON)
 tests/  unit tests, interop.sh, session/UI smoke tests, tests/keys/ (real ssh-keygen output)
@@ -519,6 +566,10 @@ The engines are *sans-I/O* on purpose: the same code is driven by a blocking `se
   independently, with the C tables generated verbatim from that same verified data rather than
   retyped a second time.
 - Generated keys are written mode 0600 and an existing key file is never overwritten.
+- **X11 forwarding** trusts whatever cookie (or lack of one) is configured for the target display
+  -- there is no untrusted, time-limited cookie negotiated with the real X server the way OpenSSH's
+  `-X` does (see X11 forwarding below); a channel presenting anything other than the exact cookie
+  this session itself advertised is refused outright, never relayed.
 
 ## Regenerating tables, vectors and fixtures (development Mac only)
 
