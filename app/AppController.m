@@ -8,6 +8,14 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+/* Makefile.openstep's real build injects the real version via -DSTEPSSH_VERSION (derived from
+ * its own VERSION, the single source of truth also used for CLIENT_VERSION and packaging/dist
+ * filenames) -- this fallback only matters for host-only builds (check-objc, the smoke tests),
+ * which never package or ship anything, so a real version number there would be misleading. */
+#ifndef STEPSSH_VERSION
+#define STEPSSH_VERSION "dev"
+#endif
 #include "oscompat.h"
 
 /* ---------------------------------------------------------------- */
@@ -142,8 +150,8 @@
 - (void)showAbout:(id)sender
 {
     NSRunAlertPanel(@"StepSSH",
-                    @"An SSH-2 client for OPENSTEP.\n\nCiphers: chacha20-poly1305, aes-ctr\nKey exchange: curve25519-sha256\nHost/user keys: ssh-ed25519",
-                    @"OK", nil, nil);
+                    @"Version %s\n\nAn SSH-2 client for OPENSTEP.\n\nCiphers: chacha20-poly1305, aes-ctr\nKey exchange: curve25519-sha256\nHost/user keys: ssh-ed25519",
+                    @"OK", nil, nil, STEPSSH_VERSION);
 }
 
 /* ---------------------------------------------------------------- */
