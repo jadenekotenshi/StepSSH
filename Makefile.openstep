@@ -22,7 +22,7 @@ APP      = StepSSH.app
 # Keep in step with core/ssh.c's CLIENT_VERSION. app/AppController.m's Info Panel gets this value
 # automatically via the -DSTEPSSH_VERSION in DEFS below (a single quoted string so the shell keeps
 # the C string literal's own double quotes) -- no separate place to remember for that one.
-VERSION  = 1.1.0
+VERSION  = 1.2.1
 DEFS     = -DOPENSTEP -DSTEPSSH_VERSION='"$(VERSION)"'
 ARCHS    =                        # e.g. -arch i386 -arch m68k -arch sparc; see `fat` below
 CFLAGS   = $(OPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
