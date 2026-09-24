@@ -228,11 +228,14 @@
 
 - (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key
                  openBrowser:(BOOL)browser verbose:(BOOL)verbose
+                  x11Enabled:(BOOL)x11 x11DisplayHost:(NSString *)x11Host x11DisplayPort:(int)x11Port
+                   x11Cookie:(NSString *)x11Cookie
 {
     SSHSession *s = [[SSHSession alloc] initWithHost:host port:port user:user keyPath:key
                                       knownHostsPath:knownHostsPath owner:self];
     [s setOpensBrowserOnLogin:browser];
     [s setVerbose:verbose];
+    [s setX11Enabled:x11 displayHost:x11Host displayPort:x11Port cookieHex:x11Cookie];
     [sessions addObject:s];
     [s release];
     [s start];
