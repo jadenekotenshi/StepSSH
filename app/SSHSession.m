@@ -181,11 +181,17 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     if ([window respondsToSelector:@selector(setResizeIncrements:)])      /* snap to whole cells */
         [window setResizeIncrements:NSMakeSize(1, 1)];
 
+    /* Scrollbar on the left, not the right -- genuine OPENSTEP/NeXTSTEP AppKit's own native
+     * default for NSScrollView's vertical scroller (NSMinXEdge; it only moves to the right under
+     * the NSMacintoshInterfaceStyle/NSWindows95InterfaceStyle compatibility styles, neither of
+     * which this app requests). This view's scroller is a plain NSScroller positioned by hand
+     * rather than an NSScrollView, so it does not inherit that platform default automatically --
+     * placed on the left explicitly here to match it. */
     container = [[NSView alloc] initWithFrame:content];
-    [termView setFrame:NSMakeRect(0, 0, cs.width, cs.height)];
+    [termView setFrame:NSMakeRect(sw, 0, cs.width, cs.height)];
     [termView setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
-    scroller = [[NSScroller alloc] initWithFrame:NSMakeRect(cs.width, 0, sw, cs.height)];
-    [scroller setAutoresizingMask:(NSViewHeightSizable | NSViewMinXMargin)];
+    scroller = [[NSScroller alloc] initWithFrame:NSMakeRect(0, 0, sw, cs.height)];
+    [scroller setAutoresizingMask:(NSViewHeightSizable | NSViewMaxXMargin)];
     [container addSubview:termView];
     [container addSubview:scroller];
     [window setContentView:container];
