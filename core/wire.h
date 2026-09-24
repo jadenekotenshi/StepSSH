@@ -35,4 +35,10 @@ int b64_encode(const u8 *in, size_t n, char *out, size_t outsz, int pad);
 /* Decode ignores ASCII whitespace; returns byte count or -1 on bad input. */
 int b64_decode(const char *in, size_t n, u8 *out, size_t outsz);
 
+/* Lowercase hex.  Encode returns length (always 2*n), or -1 if out is too small. */
+int hex_encode(const u8 *in, size_t n, char *out, size_t outsz);
+/* Decode accepts upper- or lower-case digits; returns byte count, or -1 on an odd-length
+ * input, a non-hex character, or an output buffer too small. */
+int hex_decode(const char *in, size_t n, u8 *out, size_t outsz);
+
 #endif

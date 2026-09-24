@@ -767,6 +767,30 @@ static void test_ed25519(void)
     }
 }
 
+static void test_hex(void)
+{
+    static const u8 pat[16] = { 0x00, 0x01, 0x0a, 0x0f, 0x10, 0xff, 0xde, 0xad,
+                                 0xbe, 0xef, 0x7f, 0x80, 0x55, 0xaa, 0x12, 0x34 };
+    char hex[40];
+    u8 back[16];
+    int n;
+
+    n = hex_encode(pat, 16, hex, sizeof(hex));
+    CHECK(n == 32);
+    CHECK(strcmp(hex, "00010a0f10ffdeadbeef7f8055aa1234") == 0);
+    CHECK(hex_encode(pat, 16, hex, 32) == -1);           /* no room for the trailing NUL */
+
+    n = hex_decode(hex, 32, back, sizeof(back));
+    CHECK(n == 16);
+    CHECK(memcmp(back, pat, 16) == 0);
+
+    CHECK(hex_decode("DEADBEEFCAFEBABE0011223344556677", 32, back, sizeof(back)) == 16);
+    CHECK(hex_decode("abc", 3, back, sizeof(back)) == -1);              /* odd length */
+    CHECK(hex_decode("0g", 2, back, sizeof(back)) == -1);               /* not a hex digit */
+    CHECK(hex_decode("00010203", 8, back, 3) == -1);                    /* output too small */
+    CHECK(hex_decode("", 0, back, sizeof(back)) == 0);
+}
+
 static void test_rng(void)
 {
     u8 a[32], b[32];
@@ -791,7 +815,7 @@ int main(void)
     test_sha(); test_hmac(); test_sha1(); test_knownhosts(); test_aes(); test_aes_blocks(); test_cbc_chain();
     test_blowfish(); test_des(); test_aes_gcm(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
  test_chacha();
-    test_x25519(); test_ed25519(); test_rng();
+    test_x25519(); test_ed25519(); test_hex(); test_rng();
     test_keygen();                       /* after test_rng: that test needs an unseeded pool */
     TEST_DONE("crypto");
 }

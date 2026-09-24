@@ -181,3 +181,41 @@ int b64_decode(const char *in, size_t n, u8 *out, size_t outsz)
     }
     return (int)o;
 }
+
+/* -------------------------------- hex -------------------------------- */
+
+static const char HEXD[] = "0123456789abcdef";
+
+int hex_encode(const u8 *in, size_t n, char *out, size_t outsz)
+{
+    size_t i;
+    if (outsz < n * 2 + 1) return -1;
+    for (i = 0; i < n; i++) {
+        out[i * 2]     = HEXD[in[i] >> 4];
+        out[i * 2 + 1] = HEXD[in[i] & 0xf];
+    }
+    out[n * 2] = '\0';
+    return (int)(n * 2);
+}
+
+static int hex_nibble(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+int hex_decode(const char *in, size_t n, u8 *out, size_t outsz)
+{
+    size_t i, o = 0;
+    int hi, lo;
+    if (n % 2 != 0 || outsz < n / 2) return -1;
+    for (i = 0; i < n; i += 2) {
+        hi = hex_nibble(in[i]);
+        lo = hex_nibble(in[i + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[o++] = (u8)((hi << 4) | lo);
+    }
+    return (int)o;
+}

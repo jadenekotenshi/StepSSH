@@ -79,13 +79,17 @@ $(BUILD)/test_rsa: tests/test_rsa.c tests/rsa_vectors.h $(CORE_OBJ)
 $(BUILD)/test_sftp: tests/test_sftp.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) tests/test_sftp.c $(CORE_OBJ) -o $@
 
-test: $(BUILD)/test_crypto $(BUILD)/test_vt $(BUILD)/test_sftp $(BUILD)/test_bignum $(BUILD)/test_ecc $(BUILD)/test_rsa
+$(BUILD)/test_x11: tests/test_x11.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) tests/test_x11.c $(CORE_OBJ) -o $@
+
+test: $(BUILD)/test_crypto $(BUILD)/test_vt $(BUILD)/test_sftp $(BUILD)/test_bignum $(BUILD)/test_ecc $(BUILD)/test_rsa $(BUILD)/test_x11
 	$(BUILD)/test_crypto
 	$(BUILD)/test_vt
 	$(BUILD)/test_sftp
 	$(BUILD)/test_bignum
 	$(BUILD)/test_ecc
 	$(BUILD)/test_rsa
+	$(BUILD)/test_x11
 
 interop: $(BUILD)/sshc $(BUILD)/mkkey $(BUILD)/sftpc tools
 	SSHC="$(CURDIR)/$(BUILD)/sshc" STEPSSH="$(CURDIR)/$(BUILD)/stepssh" \
