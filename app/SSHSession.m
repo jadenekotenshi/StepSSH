@@ -4,6 +4,7 @@
 #import "PortForward.h"
 #import "PortForwardController.h"
 #import "DebugLogController.h"
+#import "X11Tunnel.h"
 #include "knownhosts.h"
 #include "rng.h"
 #include <string.h>
@@ -73,6 +74,10 @@ typedef socklen_t sock_len_t;
 - (BOOL)findTunnelForChannel:(int)ch tunnel:(PortTunnel **)outT forward:(PortForward **)outPF;
 - (void)handleForwardEvent:(ssh_event *)ev tunnel:(PortTunnel *)t forward:(PortForward *)pf;
 - (void)stopAllForwards;
+- (X11Tunnel *)findX11TunnelForChannel:(int)ch;
+- (void)handleX11Event:(ssh_event *)ev tunnel:(X11Tunnel *)t;
+- (void)pumpX11;
+- (void)stopAllX11;
 - (void)dbg:(NSString *)line;
 @end
 
@@ -120,6 +125,9 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     exitStatus = -1;
     sb_init(&pendingIn);
     forwards = [[NSMutableArray alloc] init];
+    x11Tunnels = [[NSMutableArray alloc] init];
+    x11DisplayHost = [@"127.0.0.1" copy];
+    x11DisplayPort = 6000;
     return self;
 }
 
@@ -131,6 +139,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     [host release]; [user release]; [keyPath release]; [knownHostsPath release];
     [window release]; [termView release]; [scroller release]; [browser release];
     [forwards release]; [forwardController release]; [debugLog release];
+    [x11DisplayHost release]; [x11RealCookie release]; [x11Tunnels release];
     [super dealloc];
 }
 
@@ -386,7 +395,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
             return;
         }
     }
-    if (state != SESS_ENDED) { [self flushPending]; [self flushSFTP]; [self pumpForwards]; }
+    if (state != SESS_ENDED) { [self flushPending]; [self flushSFTP]; [self pumpForwards]; [self pumpX11]; }
     [self refreshTitle];
 }
 
@@ -434,6 +443,13 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
                 continue;
             }
         }
+        {
+            X11Tunnel *xt = [self findX11TunnelForChannel:ev.channel];
+            if (xt || ev.type == SSH_EV_X11_OPEN) {
+                [self handleX11Event:&ev tunnel:xt];
+                continue;
+            }
+        }
         if (sftpChannel >= 0 && ev.channel == sftpChannel &&
             (ev.type == SSH_EV_CHAN_OPEN || ev.type == SSH_EV_CHAN_OPEN_FAILED || ev.type == SSH_EV_CHAN_SUCCESS ||
              ev.type == SSH_EV_CHAN_FAILURE || ev.type == SSH_EV_CHAN_DATA || ev.type == SSH_EV_CHAN_EOF ||
@@ -467,6 +483,10 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
             break;
         case SSH_EV_CHAN_OPEN: {
             vt *t = [termView terminal];
+            if (x11Enabled)
+                ssh_channel_request_x11(ssh, channel, 0 /* single_connection: allow several X clients */,
+                                        x11RealCookie ? (const u8 *)[x11RealCookie bytes] : NULL,
+                                        x11RealCookie ? [x11RealCookie length] : 0, 0 /* screen */);
             ssh_channel_request_pty(ssh, channel, "xterm", t->cols, t->rows, 0, 0);
             ssh_channel_request_shell(ssh, channel);
             [window makeFirstResponder:termView];
@@ -622,6 +642,7 @@ New fingerprint:\n%@",
     timer = nil;
     [self sftpEnded:msg];
     [self stopAllForwards];
+    [self stopAllX11];
     if (fd >= 0) { close(fd); fd = -1; }
     if (ssh) { ssh_free(ssh); ssh = NULL; }
     channel = -1;
@@ -638,6 +659,7 @@ New fingerprint:\n%@",
 {
     [self sftpEnded:@"closed"];
     [self stopAllForwards];
+    [self stopAllX11];
     if (browser) { [browser closeWindow]; }
     if (ssh && state != SESS_ENDED) ssh_disconnect(ssh, "user closed the window");
     if (ssh) [self flushOutput];
@@ -914,6 +936,172 @@ New fingerprint:\n%@",
     for (i = 0; i < (int)[forwards count]; i++) [[forwards objectAtIndex:i] stopListening];
     [forwards removeAllObjects];
     if (forwardController) { [forwardController closeWindow]; }
+}
+
+/* ---------------------------------------------------------------- */
+/* X11 forwarding: a real "x11" SSH channel the server opened (in response to our own x11-req),
+ * relayed to a real local socket dialed out to x11DisplayHost:x11DisplayPort -- the mirror image
+ * of -L port forwarding's own PortTunnel machinery just above, with the roles of "accept" and
+ * "connect" swapped. */
+
+- (void)setX11Enabled:(BOOL)flag displayHost:(NSString *)h displayPort:(int)p cookieHex:(NSString *)cookieHex
+{
+    x11Enabled = flag;
+    [x11DisplayHost release];
+    x11DisplayHost = [((h && [h length]) ? h : @"127.0.0.1") copy];
+    x11DisplayPort = p > 0 ? p : 6000;
+    [x11RealCookie release];
+    x11RealCookie = nil;
+    if (cookieHex && [cookieHex length] == 32) {
+        u8 raw[16];
+        if (hex_decode([cookieHex cString], 32, raw, sizeof(raw)) == 16) {
+            x11RealCookie = [[NSData alloc] initWithBytes:raw length:16];
+        } else {
+            [self dbg:@"X11: the configured cookie is not valid hex; forwarding no authentication data"];
+        }
+    }
+}
+
+- (NSArray *)x11Tunnels { return x11Tunnels; }
+
+- (X11Tunnel *)findX11TunnelForChannel:(int)ch
+{
+    int i;
+    if (ch < 0) return nil;
+    for (i = 0; i < (int)[x11Tunnels count]; i++) {
+        X11Tunnel *t = [x11Tunnels objectAtIndex:i];
+        if (t->channel == ch) return t;
+    }
+    return nil;
+}
+
+- (void)handleX11Event:(ssh_event *)ev tunnel:(X11Tunnel *)t
+{
+    switch (ev->type) {
+    case SSH_EV_X11_OPEN: {
+        /* A real X11 client on the remote side just triggered this -- dial out to the local
+         * display the same way -beginConnect dials the SSH server itself: non-blocking connect(),
+         * polled to completion in -pumpX11. */
+        struct sockaddr_in sa;
+        unsigned long addr;
+        struct hostent *he;
+        const char *h = [x11DisplayHost cString];
+        int flags, rc, nfd;
+        X11Tunnel *nt;
+
+        memset(&sa, 0, sizeof(sa));
+        sa.sin_family = AF_INET;
+        sa.sin_port = htons((unsigned short)x11DisplayPort);
+        addr = inet_addr(h);
+        if (addr != INADDR_NONE) {
+            sa.sin_addr.s_addr = addr;
+        } else {
+            he = gethostbyname(h);
+            if (!he || he->h_addrtype != AF_INET || he->h_length != 4) {
+                ssh_channel_close(ssh, ev->channel);
+                break;
+            }
+            memcpy(&sa.sin_addr, he->h_addr, 4);
+        }
+        nfd = socket(AF_INET, SOCK_STREAM, 0);
+        if (nfd < 0) { ssh_channel_close(ssh, ev->channel); break; }
+        flags = fcntl(nfd, F_GETFL, 0);
+        fcntl(nfd, F_SETFL, flags | O_NONBLOCK);
+        rc = connect(nfd, (struct sockaddr *)&sa, sizeof(sa));
+
+        nt = [[[X11Tunnel alloc] init] autorelease];
+        nt->localFD = nfd;
+        nt->channel = ev->channel;
+        nt->connectDeadline = ticks + CONNECT_TIMEOUT * TICKS_PER_SEC;
+        if (rc == 0) nt->localOpen = YES;
+        else if (errno == EINPROGRESS) nt->connecting = YES;
+        else { close(nfd); ssh_channel_close(ssh, ev->channel); break; }
+        [x11Tunnels addObject:nt];
+        break;
+    }
+    case SSH_EV_CHAN_DATA:
+        if (t) sb_put(&t->outToLocal, ev->data, ev->len);            /* flushed to the socket in -pumpX11 */
+        break;
+    case SSH_EV_CHAN_EOF:
+        if (t) t->remoteClosed = YES;
+        break;
+    case SSH_EV_CHAN_CLOSE:
+        if (t) {
+            t->channel = -1;
+            if (t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
+            [x11Tunnels removeObject:t];
+        }
+        break;
+    default:
+        break;
+    }
+}
+
+/* One tick's worth of plain-socket I/O for every forwarded X11 connection: finish any pending
+ * connect()s, relay bytes each way. Mirrors -pumpForwards' own shape closely. */
+- (void)pumpX11
+{
+    int i;
+    if (state != SESS_ACTIVE || !ssh) return;
+    for (i = 0; i < (int)[x11Tunnels count]; i++) {
+        X11Tunnel *t = [x11Tunnels objectAtIndex:i];
+        unsigned char buf[16384];
+        int n;
+
+        if (t->connecting) {
+            fd_set wf;
+            struct timeval tv;
+            int err = 0;
+            sock_len_t len = sizeof(err);
+            FD_ZERO(&wf);
+            FD_SET(t->localFD, &wf);
+            tv.tv_sec = 0; tv.tv_usec = 0;
+            if (select(t->localFD + 1, NULL, &wf, NULL, &tv) > 0) {
+                getsockopt(t->localFD, SOL_SOCKET, SO_ERROR, (char *)&err, &len);
+                t->connecting = NO;
+                if (err) t->localClosed = t->remoteClosed = YES;
+                else t->localOpen = YES;
+            } else if ((int)(ticks - t->connectDeadline) > 0) {
+                t->connecting = NO;
+                t->localClosed = t->remoteClosed = YES;
+            }
+        }
+
+        if (t->outToLocal.len && t->localOpen) {
+            int w = send(t->localFD, (char *)t->outToLocal.p, t->outToLocal.len, 0);
+            if (w > 0) sb_consume(&t->outToLocal, (size_t)w);
+            else if (w < 0 && errno != EWOULDBLOCK && errno != EINTR) t->localClosed = t->remoteClosed = YES;
+        }
+        if (t->localOpen && !t->localClosed && t->outToLocal.len == 0) {
+            n = recv(t->localFD, (char *)buf, sizeof(buf), 0);
+            if (n > 0) {
+                ssh_channel_write(ssh, t->channel, buf, (size_t)n);
+            } else if (n == 0) {
+                ssh_channel_eof(ssh, t->channel);
+                t->localClosed = YES;
+            } else if (errno != EWOULDBLOCK && errno != EINTR) {
+                t->localClosed = YES;
+                if (t->channel >= 0) ssh_channel_close(ssh, t->channel);
+            }
+        }
+        if (t->localClosed && t->remoteClosed && t->outToLocal.len == 0) {
+            if (t->channel >= 0) { ssh_channel_close(ssh, t->channel); t->channel = -1; }
+            if (t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
+            [x11Tunnels removeObjectAtIndex:i];
+            i--;
+        }
+    }
+    [self flushOutput];
+}
+
+- (void)stopAllX11
+{
+    int i;
+    for (i = 0; i < (int)[x11Tunnels count]; i++) {
+        X11Tunnel *t = [x11Tunnels objectAtIndex:i];
+        if (t->localFD >= 0) { close(t->localFD); t->localFD = -1; }
+    }
+    [x11Tunnels removeAllObjects];
 }
 
 /* ---------------------------------------------------------------- */
