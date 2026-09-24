@@ -101,6 +101,11 @@ build/test_x11: tests/test_x11.c $(CORE_OBJS)
 	@( cd build ) >/dev/null 2>&1 || { echo "make: build is missing or is not a directory:"; ls -ld build; echo "remove it and run make again"; exit 1; }
 	$(CC) $(CFLAGS) -o build/test_x11 tests/test_x11.c $(CORE_OBJS)
 
+build/test_ssh_x11: tests/test_ssh_x11.c $(CORE_OBJS)
+	-mkdir build
+	@( cd build ) >/dev/null 2>&1 || { echo "make: build is missing or is not a directory:"; ls -ld build; echo "remove it and run make again"; exit 1; }
+	$(CC) $(CFLAGS) -o build/test_ssh_x11 tests/test_ssh_x11.c $(CORE_OBJS)
+
 build/bench: tools/bench.c $(CORE_OBJS)
 	-mkdir build
 	@( cd build ) >/dev/null 2>&1 || { echo "make: build is missing or is not a directory:"; ls -ld build; echo "remove it and run make again"; exit 1; }
@@ -109,7 +114,7 @@ build/bench: tools/bench.c $(CORE_OBJS)
 bench: build/bench
 	build/bench
 
-test: build/test_crypto build/test_vt build/test_sftp build/test_bignum build/test_ecc build/test_rsa build/test_x11
+test: build/test_crypto build/test_vt build/test_sftp build/test_bignum build/test_ecc build/test_rsa build/test_x11 build/test_ssh_x11
 	build/test_crypto
 	build/test_vt
 	build/test_sftp
@@ -117,6 +122,7 @@ test: build/test_crypto build/test_vt build/test_sftp build/test_bignum build/te
 	build/test_ecc
 	build/test_rsa
 	build/test_x11
+	build/test_ssh_x11
 
 # ---- ancillary command-line tools (stepssh, stepssh-keygen, stepscp) ----
 # Plain C, no AppKit: OpenSSH-syntax-compatible SSH/keygen/scp for shell scripts. See tools/*.c

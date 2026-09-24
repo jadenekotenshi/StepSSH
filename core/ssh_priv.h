@@ -11,6 +11,7 @@
 #include "chacha.h"
 #include "bignum.h"
 #include "hmac.h"
+#include "x11.h"
 
 #define SSH_MAX_PACKET     262144   /* largest packet_length we accept */
 #define SSH_MAX_CHANNELS   32
@@ -95,6 +96,9 @@ typedef struct {
     int  eof_recv, eof_sent, close_recv, close_sent;
     int  want_eof, want_close;
     sbuf out;                      /* data waiting for window space */
+    int  is_x11;                   /* a server-initiated "x11" channel, accepted via SSH_EV_X11_OPEN */
+    int  x11_setup_done;           /* the ConnectionSetup cookie has already been rewritten */
+    sbuf x11_pending;               /* CHANNEL_DATA accumulated until x11_setup_done */
 } ssh_chan;
 
 enum { KEX_IDLE = 0, KEX_SENT_INIT, KEX_WAIT_GROUP, KEX_WAIT_REPLY, KEX_WAIT_NEWKEYS };
@@ -150,6 +154,14 @@ struct ssh_session {
 
     /* connection */
     ssh_chan chan[SSH_MAX_CHANNELS];
+
+    /* X11 forwarding: set by ssh_channel_request_x11(), consulted when a server-initiated "x11"
+     * CHANNEL_OPEN arrives. x11_real_cookie_len is 0 (no authentication forwarded) or
+     * X11_COOKIE_LEN -- never anything else, enforced by ssh_channel_request_x11() itself. */
+    int  x11_active;
+    u8   x11_fake_cookie[X11_COOKIE_LEN];
+    u8   x11_real_cookie[X11_COOKIE_LEN];
+    size_t x11_real_cookie_len;
 
     /* events */
     ssh_evnode *ev_head, *ev_tail, *ev_cur;

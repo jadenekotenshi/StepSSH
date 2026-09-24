@@ -249,7 +249,7 @@ void ssh_free(ssh_session *s)
     int i;
     ssh_evnode *n, *nx;
     if (!s) return;
-    for (i = 0; i < SSH_MAX_CHANNELS; i++) sb_free(&s->chan[i].out);
+    for (i = 0; i < SSH_MAX_CHANNELS; i++) { sb_free(&s->chan[i].out); sb_free(&s->chan[i].x11_pending); }
     for (n = s->ev_head; n; n = nx) { nx = n->next; free_evnode(n); }
     free_evnode(s->ev_cur);
     ssh_auth_free(s);

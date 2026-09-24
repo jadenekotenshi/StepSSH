@@ -28,6 +28,11 @@ enum {
     SSH_EV_KBDINT,         /* keyboard-interactive prompts: see ssh_kbdint_*() */
     SSH_EV_CHAN_OPEN,      /* channel confirmed */
     SSH_EV_CHAN_OPEN_FAILED,
+    SSH_EV_X11_OPEN,       /* server-initiated "x11" channel accepted (only fires after
+                              ssh_channel_request_x11()); the channel is already open -- connect to
+                              the local X display and relay with ssh_channel_write()/SSH_EV_CHAN_DATA
+                              as usual. The fake auth cookie has already been substituted for the
+                              real one in the channel's first data, before the app ever sees it. */
     SSH_EV_CHAN_SUCCESS,   /* a channel request (pty, shell, ...) succeeded */
     SSH_EV_CHAN_FAILURE,
     SSH_EV_CHAN_DATA,      /* data/len; ext = 0 stdout, 1 stderr */
@@ -94,7 +99,9 @@ int          ssh_channel_open_session(ssh_session *s);              /* returns i
 /* Local port forwarding (RFC 4254 s.7.2): asks the server to connect to host:port and relay channel
  * data there.  originator_ip/port describe the client end of the forward's own connection, for the
  * server's logs/ACLs; harmless if approximate. Remote forwarding (-R, a server-initiated
- * "forwarded-tcpip" channel) is not implemented -- every server-initiated CHANNEL_OPEN is refused. */
+ * "forwarded-tcpip" channel) is still not implemented -- every server-initiated CHANNEL_OPEN is
+ * refused, EXCEPT for "x11" once ssh_channel_request_x11() has been called on some open channel
+ * (see SSH_EV_X11_OPEN). */
 int          ssh_channel_open_direct_tcpip(ssh_session *s, const char *host, int port,
                                            const char *originator_ip, int originator_port);
 int          ssh_channel_request_pty(ssh_session *s, int ch, const char *term,
@@ -103,6 +110,17 @@ int          ssh_channel_request_shell(ssh_session *s, int ch);
 int          ssh_channel_request_exec(ssh_session *s, int ch, const char *cmd);
 int          ssh_channel_request_subsystem(ssh_session *s, int ch, const char *name);
 int          ssh_channel_setenv(ssh_session *s, int ch, const char *name, const char *value);
+/* X11 forwarding (RFC 4254 s.6.3.1): must be called on an already-OPEN channel (typically the
+ * session channel, right after SSH_EV_CHAN_OPEN, before pty-req/shell). Generates a fresh random
+ * cookie internally and advertises it (hex-encoded) to the server as the x11-authentication-cookie
+ * -- purely so a later server-initiated "x11" open can be recognized as one this session actually
+ * asked for. `real_cookie`/`real_cookie_len` (0, or exactly 16) is the cookie to substitute in when
+ * relaying real X11 traffic to the local display; 0 means "forward no authentication data at all."
+ * `single_connection` (RFC 4254's own flag) asks the server to stop offering X11 forwarding after
+ * exactly one connection. `screen` is the X11 screen number. Returns -1 without sending anything if
+ * the channel is not CH_OPEN, real_cookie_len is neither 0 nor 16, or the RNG is not seeded. */
+int          ssh_channel_request_x11(ssh_session *s, int ch, int single_connection,
+                                     const u8 *real_cookie, size_t real_cookie_len, int screen);
 /* Queue data; returns bytes accepted (may be < len if the backlog is full). */
 int          ssh_channel_write(ssh_session *s, int ch, const u8 *data, size_t len);
 size_t       ssh_channel_backlog(const ssh_session *s, int ch);

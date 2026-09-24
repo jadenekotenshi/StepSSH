@@ -2,10 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ssh_priv.h"
+#include "rng.h"
 
 void ssh_chan_reset(ssh_chan *c)
 {
     sb_free(&c->out);
+    sb_free(&c->x11_pending);
     memset(c, 0, sizeof(*c));
 }
 
@@ -13,6 +15,15 @@ static ssh_chan *get_chan(ssh_session *s, int id)
 {
     if (id < 0 || id >= SSH_MAX_CHANNELS || s->chan[id].state == CH_FREE) return NULL;
     return &s->chan[id];
+}
+
+/* First CH_FREE slot, or -1 if every one is in use -- shared by our own client-initiated opens
+ * (open_begin) and the server-initiated "x11" accept path in ssh_chan_dispatch. */
+static int find_free_chan(ssh_session *s)
+{
+    int i;
+    for (i = 0; i < SSH_MAX_CHANNELS && s->chan[i].state != CH_FREE; i++) ;
+    return i == SSH_MAX_CHANNELS ? -1 : i;
 }
 
 static void send_simple(ssh_session *s, u8 type, u32 remote_id)
@@ -88,12 +99,69 @@ int ssh_chan_dispatch(ssh_session *s, u8 type, sreader *r)
         }
         return 0;
     }
-    case M_CHAN_OPEN: {                                    /* server-initiated: refuse */
-        size_t n;
-        u32 sender;
-        sr_str(r, &n);
+    /* server-initiated: refused, except for "x11" once ssh_channel_request_x11() has been called
+     * (RFC 4254 s.6.3.2) -- every other type, and "x11" when never requested, is refused exactly
+     * as before. */
+    case M_CHAN_OPEN: {
+        size_t tn, an;
+        const u8 *ctype, *addr;
+        u32 sender, rwindow, rmaxpkt, aport;
+        int free_i;
+        char *addrtext;
+
+        ctype = sr_str(r, &tn);
         sender = sr_u32(r);
+        rwindow = sr_u32(r);
+        rmaxpkt = sr_u32(r);
         if (r->err) return 0;
+
+        if (s->x11_active && tn == 3 && memcmp(ctype, "x11", 3) == 0) {
+            addr = sr_str(r, &an);
+            aport = sr_u32(r);
+            (void)aport;                                   /* cosmetic only; nothing here uses it */
+            if (!r->err) {
+                free_i = find_free_chan(s);
+                if (free_i < 0) {
+                    sb_init(&b);
+                    sb_put_u8(&b, M_CHAN_OPEN_FAIL);
+                    sb_put_u32(&b, sender);
+                    sb_put_u32(&b, 4);                     /* SSH_OPEN_RESOURCE_SHORTAGE */
+                    sb_put_cstr(&b, "");
+                    sb_put_cstr(&b, "");
+                    if (!b.oom) ssh_send_packet(s, b.p, b.len);
+                    sb_free(&b);
+                    return 0;
+                }
+                /* We are the one confirming this open, not the one waiting for confirmation --
+                 * straight to CH_OPEN, no CH_OPENING round trip. */
+                memset(&s->chan[free_i], 0, sizeof(s->chan[free_i]));
+                s->chan[free_i].state = CH_OPEN;
+                s->chan[free_i].remote_id = sender;
+                s->chan[free_i].remote_window = rwindow;
+                s->chan[free_i].remote_maxpkt = rmaxpkt;
+                s->chan[free_i].local_window = SSH_LOCAL_WINDOW;
+                s->chan[free_i].is_x11 = 1;
+                sb_init(&s->chan[free_i].out);
+                sb_init(&s->chan[free_i].x11_pending);
+
+                sb_init(&b);
+                sb_put_u8(&b, M_CHAN_OPEN_CONFIRM);
+                sb_put_u32(&b, sender);
+                sb_put_u32(&b, (u32)free_i);
+                sb_put_u32(&b, SSH_LOCAL_WINDOW);
+                sb_put_u32(&b, SSH_LOCAL_MAXPKT);
+                if (!b.oom) ssh_send_packet(s, b.p, b.len);
+                sb_free(&b);
+
+                addrtext = (char *)malloc(an + 1);
+                if (addrtext) { if (an) memcpy(addrtext, addr, an); addrtext[an] = '\0'; }
+                ssh_push_event(s, SSH_EV_X11_OPEN, free_i, NULL, 0, 0, 0, addrtext ? addrtext : "", NULL);
+                free(addrtext);
+                return 0;
+            }
+            /* malformed x11-specific fields: fall through to the ordinary refusal below */
+        }
+
         sb_init(&b);
         sb_put_u8(&b, M_CHAN_OPEN_FAIL);
         sb_put_u32(&b, sender);
@@ -152,7 +220,40 @@ int ssh_chan_dispatch(ssh_session *s, u8 type, sreader *r)
         if (r->err) { ssh_fail(s, "malformed channel data"); return -1; }
         if (n > c->local_window) { ssh_fail(s, "server overran the channel window"); return -1; }
         c->local_window -= (u32)n;
-        if (n) ssh_push_event(s, SSH_EV_CHAN_DATA, (int)id, d, n, (int)ext, 0, NULL, NULL);
+        if (n && c->is_x11 && !c->x11_setup_done) {
+            /* The X11 protocol's own ConnectionSetup request appears exactly once, at the start
+             * of a fresh x11 channel -- accumulate until it's whole, rewrite its cookie, and only
+             * then emit it (plus anything pipelined right after it in the same buffer) as ordinary
+             * channel data. Never surface the fake cookie to the app, not even partially. */
+            sbuf rewritten;
+            size_t consumed;
+            int rc;
+            if (sb_put(&c->x11_pending, d, n) < 0) { ssh_fail(s, "out of memory"); return -1; }
+            rc = x11_rewrite_setup(c->x11_pending.p, c->x11_pending.len, s->x11_fake_cookie,
+                                   s->x11_real_cookie_len ? s->x11_real_cookie : NULL,
+                                   s->x11_real_cookie_len, &rewritten, &consumed);
+            if (rc == X11_OK) {
+                c->x11_setup_done = 1;
+                ssh_push_event(s, SSH_EV_CHAN_DATA, (int)id, rewritten.p, rewritten.len, (int)ext, 0, NULL, NULL);
+                if (c->x11_pending.len > consumed)
+                    ssh_push_event(s, SSH_EV_CHAN_DATA, (int)id, c->x11_pending.p + consumed,
+                                   c->x11_pending.len - consumed, (int)ext, 0, NULL, NULL);
+                sb_free(&rewritten);
+                sb_free(&c->x11_pending);
+                sb_init(&c->x11_pending);
+            } else if (rc == X11_BAD) {
+                /* This channel's "connection" was never legitimately triggered by our own
+                 * x11-req -- close just this one channel, never the whole session. */
+                c->x11_setup_done = 1;                     /* stop re-inspecting; it is closing */
+                if (s->verbose)
+                    ssh_push_event(s, SSH_EV_TRACE, -1, NULL, 0, 0, 0,
+                                   "x11 channel closed: ConnectionSetup did not match what was advertised", NULL);
+                ssh_channel_close(s, (int)id);
+            }
+            /* X11_NEED_MORE: nothing to emit yet -- keep buffering in c->x11_pending. */
+        } else if (n) {
+            ssh_push_event(s, SSH_EV_CHAN_DATA, (int)id, d, n, (int)ext, 0, NULL, NULL);
+        }
         if (c->local_window < SSH_LOCAL_WINDOW / 2 && !c->close_sent) {
             sb_init(&b);
             sb_put_u8(&b, M_CHAN_WINDOW_ADJ);
@@ -218,8 +319,8 @@ static int open_begin(ssh_session *s, const char *chan_type, sbuf *b)
 {
     int i;
     if (!s->auth_ok || s->closed) return -1;
-    for (i = 0; i < SSH_MAX_CHANNELS && s->chan[i].state != CH_FREE; i++) ;
-    if (i == SSH_MAX_CHANNELS) return -1;
+    i = find_free_chan(s);
+    if (i < 0) return -1;
     memset(&s->chan[i], 0, sizeof(s->chan[i]));
     s->chan[i].state = CH_OPENING;
     s->chan[i].local_window = SSH_LOCAL_WINDOW;
@@ -339,6 +440,33 @@ int ssh_channel_setenv(ssh_session *s, int ch, const char *name, const char *val
     sb_put_cstr(&b, name);
     sb_put_cstr(&b, value);
     return req_send(s, &b);
+}
+
+int ssh_channel_request_x11(ssh_session *s, int ch, int single_connection,
+                             const u8 *real_cookie, size_t real_cookie_len, int screen)
+{
+    sbuf b;
+    char hexcookie[2 * X11_COOKIE_LEN + 1];
+
+    if (real_cookie_len != 0 && real_cookie_len != X11_COOKIE_LEN) return -1;
+    if (req_begin(s, ch, &b, "x11-req") < 0) return -1;
+    if (ssh_rng_bytes(s->x11_fake_cookie, X11_COOKIE_LEN) < 0) { sb_free(&b); return -1; }
+    hex_encode(s->x11_fake_cookie, X11_COOKIE_LEN, hexcookie, sizeof(hexcookie));
+
+    /* RFC 4254 s.6.3.1 field order: single-connection boolean, auth-protocol string (always
+     * MIT-MAGIC-COOKIE-1 -- not user-configurable in v1), the fake cookie's hex-encoded ASCII text
+     * as a string (the wire value here is explicitly hex text, not raw binary), screen number. */
+    sb_put_u8(&b, single_connection ? 1 : 0);
+    sb_put_cstr(&b, X11_AUTH_PROTO);
+    sb_put_str(&b, hexcookie, 2 * X11_COOKIE_LEN);
+    sb_put_u32(&b, (u32)screen);
+
+    if (req_send(s, &b) < 0) return -1;
+
+    if (real_cookie_len) memcpy(s->x11_real_cookie, real_cookie, real_cookie_len);
+    s->x11_real_cookie_len = real_cookie_len;
+    s->x11_active = 1;                                     /* only now: the request actually went out */
+    return 0;
 }
 
 int ssh_channel_window_change(ssh_session *s, int ch, int cols, int rows, int pxw, int pxh)
