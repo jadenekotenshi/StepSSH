@@ -22,8 +22,8 @@ check "dot syntax on objects / literals"                    '@\[|@\{|@[0-9(]'   
 check "fast enumeration"                                    'for[[:space:]]*\([^;)]*[[:space:]]in[[:space:]]' $OBJC
 check "modern integer types (NSInteger/CGFloat/...)"        '\b(NSInteger|NSUInteger|CGFloat|CGRect|CGPoint|instancetype|nullable|__weak|__strong)\b' $OBJC
 check "stdint / stdbool / inline / restrict"                '#include[[:space:]]*<(stdint|stdbool|inttypes)\.h>|\binline\b|\brestrict\b' core/*.c core/*.h term/*.c term/*.h $CLITOOLS
-check "CLOCKS_PER_SEC / CLK_TCK (not portable to OPENSTEP's libc: use gettimeofday)" '\b(CLOCKS_PER_SEC|CLK_TCK)\b' core/*.c core/*.h term/*.c app/*.m tools/bench.c
-check "declaration in for-init (C99)"                       'for[[:space:]]*\((int|unsigned|size_t|u8|u32)[[:space:]]+[a-z_]+[[:space:]]*=' core/*.c term/*.c tools/bench.c $CLITOOLS
+check "CLOCKS_PER_SEC / CLK_TCK (not portable to OPENSTEP's libc: use gettimeofday)" '\b(CLOCKS_PER_SEC|CLK_TCK)\b' core/*.c core/*.h term/*.c app/*.m tools/bench.c tools/bench_bulk.c
+check "declaration in for-init (C99)"                       'for[[:space:]]*\((int|unsigned|size_t|u8|u32)[[:space:]]+[a-z_]+[[:space:]]*=' core/*.c term/*.c tools/bench.c tools/bench_bulk.c $CLITOOLS
 check "snprintf/vsnprintf (not guaranteed on 4.2)"          '\bv?snprintf\b'                      core/*.c term/*.c app/*.m $CLITOOLS
 
 # --- APIs added after OpenStep 4.2 ---

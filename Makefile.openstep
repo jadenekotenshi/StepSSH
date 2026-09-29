@@ -148,6 +148,16 @@ build/bench: tools/bench.c $(CORE_OBJS)
 bench: build/bench
 	build/bench
 
+# Per-primitive cost of everything on the bulk-data path (ciphers, MACs, hashes, per-packet
+# overheads), for comparing before and after a change on the same machine.
+build/bench_bulk: tools/bench_bulk.c $(CORE_OBJS)
+	-mkdir build
+	@( cd build ) >/dev/null 2>&1 || { echo "make: build is missing or is not a directory:"; ls -ld build; echo "remove it and run make again"; exit 1; }
+	$(CC) $(CFLAGS) -o build/bench_bulk tools/bench_bulk.c $(CORE_OBJS)
+
+bench-bulk: build/bench_bulk
+	build/bench_bulk
+
 test: build/test_prims build/test_crypto build/test_vt build/test_sftp build/test_bignum build/test_ecc build/test_rsa build/test_x11 build/test_ssh_x11
 	build/test_prims
 	build/test_crypto

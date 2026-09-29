@@ -47,6 +47,14 @@ $(BUILD)/bench: tools/bench.c $(CORE_OBJ)
 bench: $(BUILD)/bench
 	$(BUILD)/bench
 
+# Per-primitive cost of the bulk-data path (ciphers, MACs, hashes, per-packet overheads); strict
+# flags because it also has to build under Makefile.openstep's gcc 2.7.2.
+$(BUILD)/bench_bulk: tools/bench_bulk.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) tools/bench_bulk.c $(CORE_OBJ) -o $@
+
+bench-bulk: $(BUILD)/bench_bulk
+	$(BUILD)/bench_bulk
+
 $(BUILD)/sshc: tools/sshc.c $(CORE_OBJ)
 	$(CC) -std=gnu99 -Wall -O2 -g $(SANFLAGS) tools/sshc.c $(CORE_OBJ) -o $@
 
@@ -176,4 +184,4 @@ x11-smoke:
 clean:
 	rm -rf build build-san
 
-.PHONY: all test interop lint check-objc ui-smoke session-smoke bench dist clean tools
+.PHONY: all test interop lint check-objc ui-smoke session-smoke bench bench-bulk dist clean tools
