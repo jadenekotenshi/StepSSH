@@ -32,7 +32,9 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
 **Verified on the development Mac** (all also clean under AddressSanitizer + UBSan):
 
-- `make test` &mdash; 1834 checks: crypto against independent references (Python, `openssl`, OpenSSL's
+- `make test` &mdash; 2135 checks (`test_prims`, first, takes the 64-bit and Curve25519 field arithmetic
+  apart primitive by primitive -- it found gcc 2.7.2's m68k backend miscompiling a constant 64-bit
+  `>> 16`, see `core/nacl.c`'s `SAR16` and `tests/test_prims.c`): crypto against independent references (Python, `openssl`, OpenSSL's
   own EVP API for AES-GCM, RFC/FIPS vectors), big-integer arithmetic against Python's own integers,
   elliptic curves against OpenSSL signatures and ECDH secrets, RSA signatures **byte-identical** to
   OpenSSL's, every key type and file format that `ssh-keygen` produces, the SFTP engine against an

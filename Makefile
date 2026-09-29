@@ -67,6 +67,9 @@ $(BUILD)/stepscp: tools/stepscp.c $(BUILD)/clicommon.o $(CORE_OBJ)
 
 tools: $(BUILD)/stepssh $(BUILD)/stepssh-keygen $(BUILD)/stepscp
 
+$(BUILD)/test_prims: tests/test_prims.c tests/prims_ref.h core/nacl.c $(CORE_OBJ)
+	$(CC) $(CFLAGS) tests/test_prims.c $(CORE_OBJ) -o $@
+
 $(BUILD)/test_bignum: tests/test_bignum.c tests/bn_vectors.h $(CORE_OBJ)
 	$(CC) $(CFLAGS) tests/test_bignum.c $(CORE_OBJ) -o $@
 
@@ -85,7 +88,8 @@ $(BUILD)/test_x11: tests/test_x11.c $(CORE_OBJ)
 $(BUILD)/test_ssh_x11: tests/test_ssh_x11.c $(CORE_OBJ)
 	$(CC) $(CFLAGS) tests/test_ssh_x11.c $(CORE_OBJ) -o $@
 
-test: $(BUILD)/test_crypto $(BUILD)/test_vt $(BUILD)/test_sftp $(BUILD)/test_bignum $(BUILD)/test_ecc $(BUILD)/test_rsa $(BUILD)/test_x11 $(BUILD)/test_ssh_x11
+test: $(BUILD)/test_prims $(BUILD)/test_crypto $(BUILD)/test_vt $(BUILD)/test_sftp $(BUILD)/test_bignum $(BUILD)/test_ecc $(BUILD)/test_rsa $(BUILD)/test_x11 $(BUILD)/test_ssh_x11
+	$(BUILD)/test_prims
 	$(BUILD)/test_crypto
 	$(BUILD)/test_vt
 	$(BUILD)/test_sftp
