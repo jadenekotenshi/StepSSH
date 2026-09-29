@@ -81,7 +81,16 @@ def aes():
     s += emit_array("SBOX", "u8", sbox, 2, 12) + "\n\n"
     inv = [0] * 256
     for i, v in enumerate(sbox): inv[v] = i
-    s += emit_array("INV_SBOX", "u8", inv, 2, 12) + "\n"
+    s += emit_array("INV_SBOX", "u8", inv, 2, 12) + "\n\n"
+    # One round table each way; the other three columns are byte rotations of it, done at the point
+    # of use (a 1 KB table fits a 4 KB data cache, four of them would not).
+    #   TE0[x] = (2*S[x], S[x], S[x], 3*S[x])        packed big-endian: SubBytes + MixColumns
+    #   TD0[x] = (14*Si[x], 9*Si[x], 13*Si[x], 11*Si[x])   InvSubBytes + InvMixColumns
+    te0 = [(gmul(2, sbox[x]) << 24) | (sbox[x] << 16) | (sbox[x] << 8) | gmul(3, sbox[x]) for x in range(256)]
+    td0 = [(gmul(14, inv[x]) << 24) | (gmul(9, inv[x]) << 16) | (gmul(13, inv[x]) << 8) | gmul(11, inv[x]) for x in range(256)]
+    assert te0[1] == 0xf87c7c84 and td0[0] == 0x51f4a750, (hex(te0[1]), hex(td0[0]))   # FIPS-197 / rijndael-alg-fst
+    s += emit_array("TE0", "u32", te0, 8, 4) + "\n\n"
+    s += emit_array("TD0", "u32", td0, 8, 4) + "\n"
     return s
 
 P = (1 << 255) - 19

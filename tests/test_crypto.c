@@ -251,6 +251,37 @@ static void test_aes_blocks(void)
     }
 }
 
+/* AES-CTR must not care how the data is chunked or where it sits in memory: the 32-bit XOR fast path
+ * (all pointers 4-byte aligned) and the byte path, in place or not, at every alignment, in awkward
+ * chunk sizes that split keystream blocks, must all equal one aligned one-shot call. */
+static void test_ctr_shapes(void)
+{
+    static const int cuts[] = { 1, 15, 16, 17, 31, 5, 64, 3, 48 };
+    u32 store_a[70], store_b[70];
+    u8 key[32], iv[16], ref[200], plain[200];
+    aes_ctr_ctx c;
+    int off, pos, n, ncut, inplace;
+
+    pattern(key, 32, 21); pattern(iv, 16, 33); pattern(plain, 200, 4);
+    aes_ctr_init(&c, key, 32, iv);
+    aes_ctr_xor(&c, plain, ref, 200);
+    for (off = 0; off < 4; off++) {                       /* off == 0 is 4-byte aligned, the rest are not */
+        for (inplace = 0; inplace < 2; inplace++) {
+            u8 *in = (u8 *)store_a + off, *out = inplace ? in : (u8 *)store_b + off;
+            memcpy(in, plain, 200);
+            aes_ctr_init(&c, key, 32, iv);
+            pos = 0; ncut = 0;
+            while (pos < 200) {
+                n = cuts[ncut++ % 9];
+                if (n > 200 - pos) n = 200 - pos;
+                aes_ctr_xor(&c, in + pos, out + pos, (size_t)n);
+                pos += n;
+            }
+            CHECK_MEM(out, ref, 200, inplace ? "aes-ctr chunked in place == one-shot" : "aes-ctr chunked == one-shot");
+        }
+    }
+}
+
 /* SSH chains CBC across packets: many small chained calls must equal one big call */
 static void test_cbc_chain(void)
 {
@@ -832,7 +863,7 @@ static void test_rng(void)
 
 int main(void)
 {
-    test_sha(); test_hmac(); test_sha1(); test_knownhosts(); test_aes(); test_aes_blocks(); test_cbc_chain();
+    test_sha(); test_hmac(); test_sha1(); test_knownhosts(); test_aes(); test_aes_blocks(); test_ctr_shapes(); test_cbc_chain();
     test_blowfish(); test_des(); test_aes_gcm(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
  test_chacha();
     test_x25519(); test_ed25519(); test_hex(); test_rng();
