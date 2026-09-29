@@ -13,6 +13,8 @@
 typedef struct {
     aes_ctr_ctx aesk;      /* round keys only; its own ctr/ks/used fields are unused here */
     u8  H[16];             /* hash subkey = AES_K(0^128) */
+    u32 ht[16][4];         /* GHASH multiply-by-H tables, one 128-bit entry per 4-bit value (see gcm.c) */
+    u32 last4[16];         /* what shifting a 4-bit remainder out of the bottom adds back at the top */
     u8  fixed[4];          /* constant part of the nonce, from key derivation */
     u64 invocation;        /* increments by one every seal/open call */
 } aes_gcm_ctx;
