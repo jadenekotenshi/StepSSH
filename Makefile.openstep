@@ -31,6 +31,14 @@ CFLAGS   = $(OPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 # for how it's kept off the i386/sparc compiles -- same reasoning as -m486, see there).
 M68KOPT    = -O2 -fomit-frame-pointer -m68040
 M68KCFLAGS = $(M68KOPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
+# OPENSTEP only ever ran on the sun4m SPARCstations, every one of them SPARC V8, so -mv8 is safe on
+# every machine this can run on: it uses the hardware integer multiply and divide instead of the
+# software .umul/.mul library calls gcc 2.7.2's default V7 code makes for every multiply. Benched on
+# real SPARC hardware: -mv8 is a huge win (chacha20-poly1305 went from about 4 MB/s, nearly all of it
+# Poly1305's multiplies, to a tie with AES-256-CTR at 43.8 MB/s), and -O2 a noticeable one on top.
+# Used in place of $(OPT), like M68KOPT.
+SPARCOPT    = -O2 -mv8
+SPARCCFLAGS = $(SPARCOPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 LIBS     = -framework AppKit -framework Foundation
 
 # Workspace takes an application's icon (and its file-type table) from a read-only __ICON segment
@@ -53,18 +61,19 @@ APP_OBJS  = app/AppController.o app/ConnectController.o app/KeyGenController.o \
 .SUFFIXES: .c .m .o
 
 # -m486 (486-tuned instruction scheduling) measurably speeds up chacha20-poly1305 bulk throughput
-# on real x86 hardware (see tools/optbench.sh), and M68KOPT above measurably beats plain $(OPT) on
-# real 68040 hardware. Both are single-architecture gcc switches -- -m486 is invalid on the
-# m68k/sparc backends, -m68040 invalid on i386/sparc -- so each is only added for a genuine thin
-# build of its own architecture: no -arch override in play (empty ARCHS) and `arch(1)` reporting
-# that exact architecture. A `fat` build shares one CFLAGS across every `-arch` in a single cc
-# invocation, so neither can be added there without also handing it to the other backends -- see
-# `fat-build` below for how the fat case gets them instead.
+# on real x86 hardware (see tools/optbench.sh), and M68KOPT and SPARCOPT above measurably beat plain
+# $(OPT) on real 68040 and SPARC hardware. Each is a single-architecture gcc switch set -- -m486 is
+# invalid on the m68k/sparc backends, -m68040 on i386/sparc, -mv8 on i386/m68k -- so each is only
+# added for a genuine thin build of its own architecture: no -arch override in play (empty ARCHS) and
+# `arch(1)` reporting that exact architecture. A `fat` build shares one CFLAGS across every `-arch` in
+# a single cc invocation, so none of them can be added there without also handing it to the other
+# backends -- see `fat-build` below for how the fat case gets them instead.
 
 .c.o:
 	@case "$(ARCHS)-`arch`" in \
 	    -i386) echo $(CC) $(CFLAGS) -m486 -c $< -o $@; $(CC) $(CFLAGS) -m486 -c $< -o $@ ;; \
 	    -m68k) echo $(CC) $(M68KCFLAGS) -c $< -o $@; $(CC) $(M68KCFLAGS) -c $< -o $@ ;; \
+	    -sparc) echo $(CC) $(SPARCCFLAGS) -c $< -o $@; $(CC) $(SPARCCFLAGS) -c $< -o $@ ;; \
 	    *) echo $(CC) $(CFLAGS) -c $< -o $@; $(CC) $(CFLAGS) -c $< -o $@ ;; \
 	esac
 
@@ -72,6 +81,7 @@ APP_OBJS  = app/AppController.o app/ConnectController.o app/KeyGenController.o \
 	@case "$(ARCHS)-`arch`" in \
 	    -i386) echo $(CC) $(CFLAGS) -m486 -c $< -o $@; $(CC) $(CFLAGS) -m486 -c $< -o $@ ;; \
 	    -m68k) echo $(CC) $(M68KCFLAGS) -c $< -o $@; $(CC) $(M68KCFLAGS) -c $< -o $@ ;; \
+	    -sparc) echo $(CC) $(SPARCCFLAGS) -c $< -o $@; $(CC) $(SPARCCFLAGS) -c $< -o $@ ;; \
 	    *) echo $(CC) $(CFLAGS) -c $< -o $@; $(CC) $(CFLAGS) -c $< -o $@ ;; \
 	esac
 
@@ -362,21 +372,23 @@ dist-fat: pkg-fat
 # 68040, but correct) -- LOAD32_BE/STORE32_BE etc. (ssh_types.h) meant the C core never assumed a
 # byte order, and this is that design intent actually holding up on real big-endian hardware, not
 # just link-time evidence. The AppKit/Objective-C layer is confirmed working there too (the app
-# runs its GUI, prompts for mouse-movement entropy, and connects out). sparc remains unconfirmed --
-# report back if you get that slice running on real or emulated hardware.
+# runs its GUI, prompts for mouse-movement entropy, and connects out). The whole `make test` suite
+# also passes on SPARC (2026-09-29, the first time any of this ran there); the app itself is not
+# confirmed running on SPARC -- report back if you run it on real or emulated hardware.
 #
 # CONFIRMED on real OPENSTEP 4.2 hardware (2026-09-29): the thin i386 build with -m486, and the
-# three-pass fat build described below (i386 with -m486, m68k with M68KOPT, sparc plain,
+# three-pass fat build described below (i386 with -m486, m68k with M68KOPT, sparc with SPARCOPT,
 # lipo-merged). The whole `make test` suite -- test_prims included -- also passes on a
-# Previous-emulated 68040.
+# Previous-emulated 68040 and on SPARC, after the 2026-09-29 crypto optimization pass (see README,
+# "Bulk throughput", for the throughput reported on each machine).
 #
-# Split into three groups, not one -arch list: -m486 and M68KOPT (see the .c.o:/.m.o: rules above)
-# each measurably help on their own architecture, but each is a single-architecture gcc switch the
-# other backends reject outright, and NeXT's cc has no per-arch flag scoping (no -Xarch_i386 the
-# way Apple's later toolchain gained) -- a single `cc -arch i386 -arch m68k -arch sparc ...`
-# invocation sharing one CFLAGS can't give i386 and m68k each their own tuning. So `fat-build`
-# below compiles FATARCHS_X86, FATARCHS_M68K, and FATARCHS_SPARC as three separate passes (only
-# the first two get their own tuning) and `lipo -create`s the three finished binaries together,
+# Split into three groups, not one -arch list: -m486, M68KOPT and SPARCOPT (see the .c.o:/.m.o:
+# rules above) each measurably help on their own architecture, but each is a single-architecture gcc
+# switch set the other backends reject outright, and NeXT's cc has no per-arch flag scoping (no
+# -Xarch_i386 the way Apple's later toolchain gained) -- a single `cc -arch i386 -arch m68k -arch
+# sparc ...` invocation sharing one CFLAGS can't give each its own tuning. So `fat-build` below
+# compiles FATARCHS_X86, FATARCHS_M68K, and FATARCHS_SPARC as three separate passes, each with its
+# own tuning, and `lipo -create`s the three finished binaries together,
 # rather than relying on cc's own automatic multi-arch object merging the way a single-pass fat
 # build otherwise would.
 # Each group must be a real -arch list (an empty one would turn its pass into a native thin
@@ -396,7 +408,7 @@ fat-check:
 
 # Shared three-pass build behind fat/fat-tools/install-fat/pkg-fat: builds StepSSH.app and the CLI
 # tools once per architecture group (x86 with -m486 folded into OPT, m68k with OPT replaced by
-# M68KOPT, sparc with plain $(OPT)), staging the first two passes' binaries aside in $(FATSTAGE)
+# M68KOPT, sparc with OPT replaced by SPARCOPT), staging the first two passes' binaries aside in $(FATSTAGE)
 # (cleaning between each), then lipo-merges each staged binary with its freshly-built sparc
 # counterpart into the final fat binary. Always builds both the app and the tools (needed by all
 # four callers below; the modest extra build time is the cost of not duplicating this dance four
@@ -419,8 +431,8 @@ fat-build:
 	cp build/stepssh-keygen $(FATSTAGE)/stepssh-keygen-m68k
 	cp build/stepscp $(FATSTAGE)/stepscp-m68k
 	$(MAKE) -f Makefile.openstep clean
-	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS_SPARC)"
-	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS_SPARC)"
+	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS_SPARC)" OPT="$(SPARCOPT)"
+	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS_SPARC)" OPT="$(SPARCOPT)"
 	lipo -create $(FATSTAGE)/StepSSH-x86 $(FATSTAGE)/StepSSH-m68k $(APP)/StepSSH -output $(APP)/StepSSH
 	lipo -create $(FATSTAGE)/stepssh-x86 $(FATSTAGE)/stepssh-m68k build/stepssh -output build/stepssh
 	lipo -create $(FATSTAGE)/stepssh-keygen-x86 $(FATSTAGE)/stepssh-keygen-m68k build/stepssh-keygen -output build/stepssh-keygen
@@ -428,11 +440,11 @@ fat-build:
 	rm -rf $(FATSTAGE)
 
 fat: fat-build
-	@echo "== fat build done (i386 pass used -m486, m68k pass used M68KOPT, sparc pass used plain $(OPT)); architectures actually present in $(APP)/StepSSH: =="
+	@echo "== fat build done (i386 pass used -m486, m68k pass used M68KOPT, sparc pass used SPARCOPT); architectures actually present in $(APP)/StepSSH: =="
 	lipo -info $(APP)/StepSSH
 
 fat-tools: fat-build
-	@echo "== fat tools built (i386 pass used -m486, m68k pass used M68KOPT, sparc pass used plain $(OPT)); architectures actually present: =="
+	@echo "== fat tools built (i386 pass used -m486, m68k pass used M68KOPT, sparc pass used SPARCOPT); architectures actually present: =="
 	lipo -info build/stepssh build/stepssh-keygen build/stepscp
 
 install-fat: fat-build
