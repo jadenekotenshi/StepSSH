@@ -355,6 +355,83 @@ static void test_packet_padding(void)
     ssh_free(s);
 }
 
+/* -------------------------- ssh_prefer_cipher (the GUI's cipher choice) -------------------------- */
+
+/* The idx'th name-list of the KEXINIT ssh_start() queued (0 = kex, 1 = host key, 2 = encryption
+ * client->server, 4 = MAC client->server), read off the wire: the identification line, then one
+ * plaintext packet -- nothing is encrypted before the key exchange. */
+static int offered_list(ssh_session *s, int idx, char *out, size_t outsz)
+{
+    const u8 *raw, *payload, *sp;
+    size_t rawlen, plen, ident, sl;
+    sreader r;
+    int i;
+
+    raw = ssh_output(s, &rawlen);
+    for (ident = 0; ident < rawlen && raw[ident] != '\n'; ident++) ;
+    if (ident >= rawlen) return -1;
+    payload = parse_packet(raw + ident + 1, rawlen - ident - 1, &plen);
+    if (!payload) return -1;
+    sr_init(&r, payload, plen);
+    if (sr_u8(&r) != M_KEXINIT) return -1;
+    sr_bytes(&r, 16);                                    /* the cookie */
+    sp = NULL; sl = 0;
+    for (i = 0; i <= idx; i++) sp = sr_str(&r, &sl);
+    if (r.err || sl >= outsz) return -1;
+    memcpy(out, sp, sl);
+    out[sl] = '\0';
+    return 0;
+}
+
+static void check_cipher_list(const char *choice, int want_rc, const char *want)
+{
+    char got[400];
+    ssh_session *s = ssh_new("tester");
+    CHECK(ssh_prefer_cipher(s, choice) == want_rc);
+    CHECK(ssh_start(s) == 0);
+    CHECK(offered_list(s, 2, got, sizeof(got)) == 0);
+    CHECK(strcmp(got, want) == 0);
+    if (strcmp(got, want) != 0) printf("  got  %s\n  want %s\n", got, want);
+    ssh_free(s);
+}
+
+static void test_prefer_cipher(void)
+{
+    static const char DEF[] =
+        "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,"
+        "aes256-ctr,aes192-ctr,aes128-ctr,aes256-cbc,aes192-cbc,aes128-cbc,blowfish-cbc,3des-cbc";
+    char got[400];
+    ssh_session *s;
+
+    check_cipher_list(NULL, 0, DEF);                                    /* no choice: the default order */
+    check_cipher_list("", 0, DEF);
+    check_cipher_list("chacha20-poly1305@openssh.com", 0, DEF);         /* already first: unchanged */
+    check_cipher_list("aes256-ctr", 0,
+        "aes256-ctr,chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,"
+        "aes192-ctr,aes128-ctr,aes256-cbc,aes192-cbc,aes128-cbc,blowfish-cbc,3des-cbc");
+    check_cipher_list("3des-cbc", 0,                                    /* the last name moves up, no stray comma */
+        "3des-cbc,chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,"
+        "aes256-ctr,aes192-ctr,aes128-ctr,aes256-cbc,aes192-cbc,aes128-cbc,blowfish-cbc");
+    check_cipher_list("aes128-cbc", 0,                                  /* a name sharing a prefix with others */
+        "aes128-cbc,chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,"
+        "aes256-ctr,aes192-ctr,aes128-ctr,aes256-cbc,aes192-cbc,blowfish-cbc,3des-cbc");
+    check_cipher_list("aes256", -1, DEF);                               /* not a real cipher: default stays */
+    check_cipher_list("aes256-ctr,aes128-ctr", -1, DEF);                /* one name only, not a list */
+
+    /* choosing, then changing your mind: NULL restores the default; MAC preferences are left alone */
+    s = ssh_new("tester");
+    ssh_set_prefs(s, NULL, "hmac-sha1");
+    CHECK(ssh_prefer_cipher(s, "aes128-ctr") == 0);
+    CHECK(ssh_prefer_cipher(s, NULL) == 0);
+    CHECK(ssh_prefer_cipher(s, "aes128-gcm@openssh.com") == 0);
+    CHECK(ssh_start(s) == 0);
+    CHECK(offered_list(s, 2, got, sizeof(got)) == 0);
+    CHECK(strncmp(got, "aes128-gcm@openssh.com,chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr,", 87) == 0);
+    CHECK(offered_list(s, 4, got, sizeof(got)) == 0);
+    CHECK(strcmp(got, "hmac-sha1") == 0);
+    ssh_free(s);
+}
+
 int main(void)
 {
     seed_rng();
@@ -365,5 +442,6 @@ int main(void)
     test_x11_refused_when_not_requested();
     test_exhaustion_gets_resource_shortage();
     test_packet_padding();
+    test_prefer_cipher();
     TEST_DONE("ssh_x11");
 }

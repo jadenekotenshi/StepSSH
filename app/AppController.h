@@ -24,7 +24,7 @@
 - (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key
                  openBrowser:(BOOL)browser verbose:(BOOL)verbose
                   x11Enabled:(BOOL)x11 x11DisplayHost:(NSString *)x11Host x11DisplayPort:(int)x11Port
-                   x11Cookie:(NSString *)x11Cookie;
+                   x11Cookie:(NSString *)x11Cookie preferredCipher:(NSString *)cipher;
 - (void)openFileBrowser:(id)sender;
 - (void)openPortForwarding:(id)sender;
 - (void)sessionDidEnd:(SSHSession *)session;

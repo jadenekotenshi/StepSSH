@@ -244,6 +244,42 @@ void ssh_set_prefs(ssh_session *s, const char *ciphers, const char *macs)
     s->pref_macs = macs ? xstrdup(macs) : NULL;
 }
 
+/* Put one cipher first in the offered list and keep the rest of the default order behind it, so a
+ * server that does not offer it still connects (the server takes the first name in OUR list that it
+ * supports).  NULL or "" restores the default order.  -1 if the name is not a cipher we implement (the
+ * default order is then in effect). */
+int ssh_prefer_cipher(ssh_session *s, const char *cipher)
+{
+    char *list;
+    const char *p, *q;
+    size_t n, cl, len, i;
+    int known = 0;
+
+    free(s->pref_ciphers);
+    s->pref_ciphers = NULL;
+    if (!cipher || !*cipher) return 0;
+    for (i = 0; i < sizeof(CIPHERS) / sizeof(CIPHERS[0]); i++)
+        if (strcmp(CIPHERS[i].name, cipher) == 0) known = 1;
+    if (!known) return -1;
+    cl = strlen(cipher);
+    list = (char *)malloc(cl + 1 + sizeof(DEF_CIPHERS) + 1);
+    if (!list) return -1;
+    memcpy(list, cipher, cl);
+    n = cl;
+    for (p = DEF_CIPHERS; *p; p = q) {              /* every default name except the chosen one */
+        q = strchr(p, ',');
+        len = q ? (size_t)(q - p) : strlen(p);
+        q = q ? q + 1 : p + len;
+        if (len == cl && memcmp(p, cipher, cl) == 0) continue;
+        list[n++] = ',';
+        memcpy(list + n, p, len);
+        n += len;
+    }
+    list[n] = '\0';
+    s->pref_ciphers = list;
+    return 0;
+}
+
 void ssh_free(ssh_session *s)
 {
     int i;

@@ -9,9 +9,9 @@
     NSButton         *useKeyBox, *saveBox, *browserBox, *verboseBox;
     NSButton         *x11Box;
     NSTextField      *x11HostField, *x11PortField, *x11CookieField;
-    NSPopUpButton    *savedPopup;
+    NSPopUpButton    *savedPopup, *cipherPopup;
     NSMutableArray   *profiles;                /* array of NSDictionary: host, port, user, key,
-                                                   x11, x11Host, x11Port, x11Cookie */
+                                                   x11, x11Host, x11Port, x11Cookie, cipher */
 }
 - (id)initWithOwner:(id)anOwner;
 - (void)showPanel;
@@ -26,5 +26,5 @@
 - (void)openSessionWithHost:(NSString *)host port:(int)port user:(NSString *)user keyPath:(NSString *)key
                  openBrowser:(BOOL)browser verbose:(BOOL)verbose
                   x11Enabled:(BOOL)x11 x11DisplayHost:(NSString *)x11Host x11DisplayPort:(int)x11Port
-                   x11Cookie:(NSString *)x11Cookie;
+                   x11Cookie:(NSString *)x11Cookie preferredCipher:(NSString *)cipher;
 @end

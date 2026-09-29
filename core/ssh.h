@@ -62,6 +62,9 @@ void         ssh_free(ssh_session *s);
 /* Optional: override algorithm preference lists (comma-separated names).
  * NULL keeps the default.  Mainly for testing and for legacy servers. */
 void         ssh_set_prefs(ssh_session *s, const char *ciphers, const char *macs);
+/* Offer one cipher first (by its SSH name, e.g. "aes256-ctr") with the default order behind it as
+ * fallback; NULL or "" restores the default.  Returns -1 for a name we do not implement. */
+int          ssh_prefer_cipher(ssh_session *s, const char *cipher);
 /* Restrict / reorder the key exchange methods offered (comma-separated). NULL = default. */
 void         ssh_set_kex_prefs(ssh_session *s, const char *kex);
 /* Queue our identification string and KEXINIT.  Fails if the RNG is not

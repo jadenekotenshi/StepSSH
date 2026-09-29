@@ -107,6 +107,40 @@ static int has_entry(SFTPBrowser *b, NSString *name, BOOL wantDir, unsigned long
 static int pass, fail;
 #define EXPECT(cond, what) do { if (cond) { pass++; printf("  ok   %s\n", what); } else { fail++; printf("  FAIL %s\n", what); } } while (0)
 
+/* A separate verbose connection with `cipher` preferred (nil = the default order): logs in, exits, and
+ * returns the debug log, which records the negotiated algorithms ("Authenticated. kex=... cipher=...").
+ * The sshd is real, so this proves the choice reaches the wire and that the server's answer is honoured. */
+static NSString *log_with_cipher(char **argv, NSString *cipher)
+{
+    Owner *o = [[Owner alloc] init];
+    SSHSession *vs = [[SSHSession alloc] initWithHost:@"127.0.0.1" port:atoi(argv[1])
+                                                 user:[NSString stringWithCString:argv[2]]
+                                              keyPath:[NSString stringWithCString:argv[3]]
+                                       knownHostsPath:[NSString stringWithCString:argv[4]]
+                                                owner:o];
+    TerminalView *vtv;
+    DebugLogController *dlc;
+    NSString *log;
+
+    [vs setVerbose:YES];
+    [vs setPreferredCipher:cipher];
+    [vs start];
+    vtv = find_terminal([vs window]);
+    dlc = [vs debugLogController];
+    wait_for(vtv, @"Trying public key", 10);
+    { double w = 0; while (![vs isActive] && w < 5) { spin(0.05); w += 0.05; } }
+    spin(0.3);
+    log = [[[dlc logText] copy] autorelease];
+    [vs terminalView:vtv sendBytes:(const unsigned char *)"exit\r" length:5];
+    wait_for(vtv, @"Connection closed", 10);
+    [[vs window] close];
+    [[dlc window] close];
+    spin(0.2);
+    [vs release];
+    [o release];
+    return log;
+}
+
 int main(int argc, char *argv[])
 {
     NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
@@ -402,6 +436,27 @@ int main(int argc, char *argv[])
         EXPECT([vs debugLogController] == nil, "closing the debug log window releases it");
         [vs release];
         [vowner release];
+    }
+
+    /* ---- the GUI's cipher choice (setPreferredCipher:) reaches a real sshd's negotiation ---- */
+    {
+        NSString *log;
+
+        log = log_with_cipher(argv, @"aes256-ctr");
+        EXPECT([log rangeOfString:@"Cipher preference: aes256-ctr first"].length > 0, "the log says which cipher was preferred");
+        EXPECT([log rangeOfString:@"cipher=aes256-ctr "].length > 0, "preferring aes256-ctr negotiates aes256-ctr");
+
+        log = log_with_cipher(argv, @"aes128-gcm@openssh.com");
+        EXPECT([log rangeOfString:@"cipher=aes128-gcm@openssh.com "].length > 0, "preferring aes128-gcm negotiates aes128-gcm");
+
+        log = log_with_cipher(argv, @"blowfish-cbc");            /* no current sshd offers it: the default order behind it takes over */
+        EXPECT([log rangeOfString:@"Authenticated."].length > 0 && [log rangeOfString:@"cipher=blowfish-cbc"].length == 0,
+               "a preferred cipher the server lacks still connects, on the fallback");
+
+        log = log_with_cipher(argv, nil);
+        EXPECT([log rangeOfString:@"Cipher preference: the default order"].length > 0 &&
+               [log rangeOfString:@"cipher=chacha20-poly1305@openssh.com "].length > 0,
+               "with no choice the default order negotiates chacha20-poly1305");
     }
 
     /* orderly exit */

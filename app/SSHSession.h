@@ -56,6 +56,7 @@ enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
      * server-initiated "x11" channel that arrives after that becomes its own X11Tunnel, relayed
      * to x11DisplayHost:x11DisplayPort the same way -L's own tunnels are relayed, just dialed
      * outbound instead of accepted. */
+    NSString       *preferredCipher;     /* nil/empty: the default cipher order (see -setPreferredCipher:) */
     BOOL            x11Enabled;
     NSString       *x11DisplayHost;
     int             x11DisplayPort;
@@ -102,6 +103,11 @@ enum { SESS_CONNECTING = 1, SESS_HANDSHAKE, SESS_ACTIVE, SESS_ENDED };
  * empty for "forward no authentication data at all." */
 - (void)setX11Enabled:(BOOL)flag displayHost:(NSString *)h displayPort:(int)p cookieHex:(NSString *)cookieHex;
 - (NSArray *)x11Tunnels;                                                                /* read-only, for tests */
+
+/* The cipher to offer first, by its SSH name (@"aes256-ctr", @"chacha20-poly1305@openssh.com", ...),
+ * with the default order behind it as fallback so a server that lacks it still connects; nil or empty
+ * keeps the default order.  Call before -start (the New Connection panel does). */
+- (void)setPreferredCipher:(NSString *)name;
 @end
 
 @interface NSObject (SSHSessionOwner)

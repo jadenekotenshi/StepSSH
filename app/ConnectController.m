@@ -3,12 +3,26 @@
 #include "wire.h"
 
 #define DEFAULTS_KEY @"SavedHosts"
+#define CIPHER_DEFAULT_KEY @"PreferredCipher"       /* the last choice in the Cipher popup: the next panel's default */
+
+/* The Cipher popup's choices, in menu order: the title shown, and the SSH name of the cipher that
+ * choice offers first ("" = leave the default order, which is ChaCha20-Poly1305 first).  The rest of
+ * the default order always stays behind a choice as fallback, so a server that lacks it still connects. */
+#define NCIPHER_CHOICES 6
+static const char *cipherTitles[NCIPHER_CHOICES] = {
+    "Automatic (the default order)", "ChaCha20-Poly1305", "AES-256-GCM", "AES-128-GCM",
+    "AES-256-CTR", "AES-128-CTR" };
+static const char *cipherNames[NCIPHER_CHOICES] = {
+    "", "chacha20-poly1305@openssh.com", "aes256-gcm@openssh.com", "aes128-gcm@openssh.com",
+    "aes256-ctr", "aes128-ctr" };
 
 /* gcc 2.7.2 does not look ahead within an @implementation, so anything called
  * before its definition must be declared here. */
 @interface ConnectController (Private)
 - (void)buildPanel;
 - (void)reloadSaved;
+- (NSString *)chosenCipherName;
+- (void)selectCipherNamed:(NSString *)name;
 @end
 
 @implementation ConnectController
@@ -35,14 +49,16 @@
 {
     NSView *c;
     NSButton *connectBtn, *cancelBtn, *delBtn;
+    int i;
     NSString *defKey = [NSHomeDirectory() stringByAppendingPathComponent:@".ssh/id_ed25519"];
     BOOL haveDefKey = [[NSFileManager defaultManager] fileExistsAtPath:defKey];
     /* Column plan: labels 14..94, fields 100..406.  Every row is 34 high. The three X11 rows sit
      * right above the button row (their own labels/fields following the same column plan, except
-     * the "Cookie" label, which needs more width than 80 for its longer text); every other row
-     * is the original layout shifted up 102 (three rows' worth) to make room. */
+     * the "Cookie" label, which needs more width than 80 for its longer text); the Cipher row sits
+     * between them and the rows above (the original layout, shifted up 136 -- four rows' worth --
+     * to make room). */
 
-    panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 422)
+    panel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 420, 456)
                                        styleMask:(NSTitledWindowMask | NSClosableWindowMask)
                                          backing:NSBackingStoreBuffered
                                            defer:NO];
@@ -51,51 +67,57 @@
     [panel setHidesOnDeactivate:NO];          /* an NSPanel otherwise hides while another app is active */
     c = [panel contentView];
 
-    [c addSubview:ui_label(@"Saved:", NSMakeRect(14, 384, 80, 20))];
-    savedPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(100, 382, 222, 24) pullsDown:NO];
+    [c addSubview:ui_label(@"Saved:", NSMakeRect(14, 418, 80, 20))];
+    savedPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(100, 416, 222, 24) pullsDown:NO];
     [savedPopup setTarget:self];
     [savedPopup setAction:@selector(savedChosen:)];
     [c addSubview:savedPopup];
-    delBtn = [[[NSButton alloc] initWithFrame:NSMakeRect(330, 380, 76, 26)] autorelease];
+    delBtn = [[[NSButton alloc] initWithFrame:NSMakeRect(330, 414, 76, 26)] autorelease];
     [delBtn setTitle:@"Delete"];
     [delBtn setTarget:self];
     [delBtn setAction:@selector(deleteSaved:)];
     [c addSubview:delBtn];
 
-    [c addSubview:ui_label(@"Host:", NSMakeRect(14, 348, 80, 20))];
-    hostField = ui_field(NSMakeRect(100, 346, 196, 22));
+    [c addSubview:ui_label(@"Host:", NSMakeRect(14, 382, 80, 20))];
+    hostField = ui_field(NSMakeRect(100, 380, 196, 22));
     [c addSubview:hostField];
-    [c addSubview:ui_label(@"Port:", NSMakeRect(304, 348, 36, 20))];
-    portField = ui_field(NSMakeRect(342, 346, 64, 22));
+    [c addSubview:ui_label(@"Port:", NSMakeRect(304, 382, 36, 20))];
+    portField = ui_field(NSMakeRect(342, 380, 64, 22));
     [portField setStringValue:@"22"];
     [c addSubview:portField];
 
-    [c addSubview:ui_label(@"User:", NSMakeRect(14, 314, 80, 20))];
-    userField = ui_field(NSMakeRect(100, 312, 306, 22));
+    [c addSubview:ui_label(@"User:", NSMakeRect(14, 348, 80, 20))];
+    userField = ui_field(NSMakeRect(100, 346, 306, 22));
     [userField setStringValue:NSUserName()];
     [c addSubview:userField];
 
-    useKeyBox = ui_switch(@"Log in with a key file", NSMakeRect(14, 278, 392, 22));
+    useKeyBox = ui_switch(@"Log in with a key file", NSMakeRect(14, 312, 392, 22));
     [useKeyBox retain];
     [useKeyBox setState:haveDefKey ? 1 : 0];
     [c addSubview:useKeyBox];
 
-    [c addSubview:ui_label(@"Key file:", NSMakeRect(14, 246, 80, 20))];
-    keyField = ui_field(NSMakeRect(100, 244, 306, 22));
+    [c addSubview:ui_label(@"Key file:", NSMakeRect(14, 280, 80, 20))];
+    keyField = ui_field(NSMakeRect(100, 278, 306, 22));
     [keyField setStringValue:haveDefKey ? defKey : @""];
     [c addSubview:keyField];
 
-    saveBox = ui_switch(@"Remember this host", NSMakeRect(14, 212, 392, 22));
+    saveBox = ui_switch(@"Remember this host", NSMakeRect(14, 246, 392, 22));
     [saveBox retain];
     [c addSubview:saveBox];
 
-    browserBox = ui_switch(@"Open the file browser after logging in", NSMakeRect(14, 182, 392, 22));
+    browserBox = ui_switch(@"Open the file browser after logging in", NSMakeRect(14, 216, 392, 22));
     [browserBox retain];
     [c addSubview:browserBox];
 
-    verboseBox = ui_switch(@"Verbose logging (for troubleshooting)", NSMakeRect(14, 152, 392, 22));
+    verboseBox = ui_switch(@"Verbose logging (for troubleshooting)", NSMakeRect(14, 186, 392, 22));
     [verboseBox retain];
     [c addSubview:verboseBox];
+
+    [c addSubview:ui_label(@"Cipher:", NSMakeRect(14, 154, 80, 20))];
+    cipherPopup = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(100, 152, 306, 24) pullsDown:NO];
+    for (i = 0; i < NCIPHER_CHOICES; i++) [cipherPopup addItemWithTitle:[NSString stringWithCString:cipherTitles[i]]];
+    [self selectCipherNamed:[[NSUserDefaults standardUserDefaults] stringForKey:CIPHER_DEFAULT_KEY]];
+    [c addSubview:cipherPopup];
 
     x11Box = ui_switch(@"Forward X11", NSMakeRect(14, 118, 392, 22));
     [x11Box retain];
@@ -147,6 +169,21 @@
     }
 }
 
+- (NSString *)chosenCipherName
+{
+    int i = [cipherPopup indexOfSelectedItem];
+    if (i < 0 || i >= NCIPHER_CHOICES) i = 0;
+    return [NSString stringWithCString:cipherNames[i]];
+}
+
+- (void)selectCipherNamed:(NSString *)name
+{
+    int i, found = 0;
+    for (i = 0; i < NCIPHER_CHOICES; i++)
+        if (name && [name isEqualToString:[NSString stringWithCString:cipherNames[i]]]) { found = i; break; }
+    [cipherPopup selectItemAtIndex:found];
+}
+
 - (void)showPanel
 {
     if (!panel) [self buildPanel];
@@ -159,7 +196,7 @@
 {
     int i = [savedPopup indexOfSelectedItem] - 1;
     NSDictionary *d;
-    NSString *k, *xh, *xp, *xc;
+    NSString *k, *xh, *xp, *xc, *ci;
     if (i < 0 || i >= (int)[profiles count]) return;
     d = [profiles objectAtIndex:i];
     [hostField setStringValue:[d objectForKey:@"host"]];
@@ -179,6 +216,9 @@
     [x11PortField setStringValue:(xp && [xp length]) ? xp : @"6000"];
     xc = [d objectForKey:@"x11Cookie"];
     [x11CookieField setStringValue:xc ? xc : @""];
+
+    ci = [d objectForKey:@"cipher"];                          /* an older profile has none: leave the choice as it is */
+    if (ci) [self selectCipherNamed:ci];
 }
 
 - (void)deleteSaved:(id)sender
@@ -210,6 +250,7 @@
     NSString *x11Host = ui_trim([x11HostField stringValue]);
     int x11Port = [[x11PortField stringValue] intValue];
     NSString *x11Cookie = ui_trim([x11CookieField stringValue]);
+    NSString *cipher = [self chosenCipherName];
 
     if ([h length] == 0 || [u length] == 0) {
         NSRunAlertPanel(@"Missing information", @"Enter a host name and a user name.", @"OK", nil, nil);
@@ -244,7 +285,7 @@
         NSDictionary *d = [NSDictionary dictionaryWithObjectsAndKeys:
             h, @"host", [NSString stringWithFormat:@"%d", p], @"port", u, @"user", k, @"key",
             (x11 ? @"1" : @"0"), @"x11", x11Host, @"x11Host",
-            [NSString stringWithFormat:@"%d", x11Port], @"x11Port", x11Cookie, @"x11Cookie", nil];
+            [NSString stringWithFormat:@"%d", x11Port], @"x11Port", x11Cookie, @"x11Cookie", cipher, @"cipher", nil];
         int i;
         for (i = 0; i < (int)[profiles count]; i++) {                 /* replace an existing entry */
             NSDictionary *o = [profiles objectAtIndex:i];
@@ -258,11 +299,14 @@
         [[NSUserDefaults standardUserDefaults] synchronize];
         [self reloadSaved];
     }
+    [[NSUserDefaults standardUserDefaults] setObject:cipher forKey:CIPHER_DEFAULT_KEY];    /* next panel's default */
+    [[NSUserDefaults standardUserDefaults] synchronize];
     [panel orderOut:nil];
     [owner openSessionWithHost:h port:p user:u keyPath:k
                     openBrowser:([browserBox state] ? YES : NO)
                         verbose:([verboseBox state] ? YES : NO)
-                     x11Enabled:x11 x11DisplayHost:x11Host x11DisplayPort:x11Port x11Cookie:x11Cookie];
+                     x11Enabled:x11 x11DisplayHost:x11Host x11DisplayPort:x11Port x11Cookie:x11Cookie
+                preferredCipher:cipher];
 }
 
 @end

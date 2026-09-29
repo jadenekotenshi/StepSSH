@@ -139,7 +139,7 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     [host release]; [user release]; [keyPath release]; [knownHostsPath release];
     [window release]; [termView release]; [scroller release]; [browser release];
     [forwards release]; [forwardController release]; [debugLog release];
-    [x11DisplayHost release]; [x11RealCookie release]; [x11Tunnels release];
+    [preferredCipher release]; [x11DisplayHost release]; [x11RealCookie release]; [x11Tunnels release];
     [super dealloc];
 }
 
@@ -239,15 +239,24 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
 
 - (void)start
 {
+    int cipherRc;
     [self buildWindow];
     [self loadKey];
     ssh = ssh_new([user cString]);
     if (!ssh) { [self endWithMessage:@"out of memory"]; return; }
+    cipherRc = 0;
+    if (preferredCipher && [preferredCipher length]) cipherRc = ssh_prefer_cipher(ssh, [preferredCipher cString]);
     if (verbose) {
         ssh_set_verbose(ssh, 1);
         debugLog = [[DebugLogController alloc] initWithSession:self];
         [debugLog show];
         [self dbg:[NSString stringWithFormat:@"Connecting to %@ port %d as %@ ...", host, port, user]];
+        if (preferredCipher && [preferredCipher length])
+            [self dbg:[NSString stringWithFormat:@"Cipher preference: %@ first%@", preferredCipher,
+                       cipherRc < 0 ? @" (not a cipher this client implements; using the default order)"
+                                    : @", the default order behind it"]];
+        else
+            [self dbg:@"Cipher preference: the default order"];
     }
     timer = [[NSTimer scheduledTimerWithTimeInterval:TICK_SECONDS target:self
                                             selector:@selector(tick:) userInfo:nil repeats:YES] retain];
@@ -943,6 +952,12 @@ New fingerprint:\n%@",
  * relayed to a real local socket dialed out to x11DisplayHost:x11DisplayPort -- the mirror image
  * of -L port forwarding's own PortTunnel machinery just above, with the roles of "accept" and
  * "connect" swapped. */
+
+- (void)setPreferredCipher:(NSString *)name
+{
+    [preferredCipher autorelease];
+    preferredCipher = [name copy];
+}
 
 - (void)setX11Enabled:(BOOL)flag displayHost:(NSString *)h displayPort:(int)p cookieHex:(NSString *)cookieHex
 {

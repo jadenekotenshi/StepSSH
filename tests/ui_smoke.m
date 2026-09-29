@@ -31,7 +31,11 @@ void PSshow(const char *s)
 - (float)widthOfString:(NSString *)s { return [self maximumAdvancement].width; }
 @end
 
-@interface ConnectController (SmokePrivate) - (void)buildPanel; @end
+@interface ConnectController (SmokePrivate)
+- (void)buildPanel;
+- (NSString *)chosenCipherName;
+- (void)selectCipherNamed:(NSString *)name;
+@end
 
 @interface KeyCapture : NSObject
 {
@@ -122,6 +126,8 @@ int main(int argc, char *argv[])
         EXPECT([[NSApp mainMenu] itemWithTitle:@"Edit"] != nil, "Edit menu present");
 
         /* 2. connection panel (built, never shown) */
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"PreferredCipher"];    /* a clean slate: this */
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:@"SavedHosts"];         /* process's own domain */
         cc = [[ConnectController alloc] initWithOwner:app];
         [cc buildPanel];
         EXPECT(1, "connection panel built");
@@ -154,6 +160,56 @@ int main(int argc, char *argv[])
             EXPECT(overlaps == 0, "no two controls in the connection panel overlap");
             EXPECT(cramped == 0, "every label and button is large enough for its text");
             EXPECT([subs count] >= 14, "the panel has all of its controls");
+        }
+
+        {   /* 2a. the Cipher popup: its choices, the SSH names they map to, and that the last choice made
+             * (stored under PreferredCipher by -connect:) and a saved profile's choice both come back */
+            NSPopUpButton *pop = [cc valueForKey:@"cipherPopup"];
+            NSUserDefaults *ud = [NSUserDefaults standardUserDefaults];
+            ConnectController *cc2;
+            NSPopUpButton *saved2;
+            NSDictionary *withCipher, *without;
+
+            EXPECT(pop != nil && [pop numberOfItems] == 6, "the cipher popup has its six choices");
+            EXPECT([[cc chosenCipherName] isEqualToString:@""], "with nothing chosen the cipher is automatic (the default order)");
+            [pop selectItemAtIndex:1];
+            EXPECT([[cc chosenCipherName] isEqualToString:@"chacha20-poly1305@openssh.com"], "ChaCha20-Poly1305 maps to its SSH name");
+            [pop selectItemAtIndex:4];
+            EXPECT([[cc chosenCipherName] isEqualToString:@"aes256-ctr"], "AES-256-CTR maps to its SSH name");
+            [pop selectItemAtIndex:5];
+            EXPECT([[cc chosenCipherName] isEqualToString:@"aes128-ctr"], "AES-128-CTR maps to its SSH name");
+            [cc selectCipherNamed:@"aes128-gcm@openssh.com"];
+            EXPECT([pop indexOfSelectedItem] == 3, "selecting a cipher by its SSH name picks its menu item");
+            [cc selectCipherNamed:@"no-such-cipher"];
+            EXPECT([pop indexOfSelectedItem] == 0, "an unknown cipher name falls back to automatic");
+            [cc selectCipherNamed:nil];
+            EXPECT([pop indexOfSelectedItem] == 0, "no cipher name means automatic");
+
+            [ud setObject:@"aes256-ctr" forKey:@"PreferredCipher"];
+            cc2 = [[ConnectController alloc] initWithOwner:app];
+            [cc2 buildPanel];
+            EXPECT([[cc2 chosenCipherName] isEqualToString:@"aes256-ctr"], "a new panel starts on the last cipher chosen");
+            [cc2 release];
+
+            withCipher = [NSDictionary dictionaryWithObjectsAndKeys:
+                @"h1", @"host", @"22", @"port", @"u", @"user", @"", @"key", @"aes128-ctr", @"cipher", nil];
+            without = [NSDictionary dictionaryWithObjectsAndKeys:
+                @"h2", @"host", @"22", @"port", @"u", @"user", @"", @"key", nil];
+            [ud setObject:[NSArray arrayWithObjects:withCipher, without, nil] forKey:@"SavedHosts"];
+            cc2 = [[ConnectController alloc] initWithOwner:app];
+            [cc2 buildPanel];
+            saved2 = [cc2 valueForKey:@"savedPopup"];
+            [saved2 selectItemAtIndex:1];
+            [cc2 savedChosen:saved2];
+            EXPECT([[cc2 chosenCipherName] isEqualToString:@"aes128-ctr"], "a saved profile restores its cipher");
+            [cc2 selectCipherNamed:@"aes256-gcm@openssh.com"];
+            [saved2 selectItemAtIndex:2];
+            [cc2 savedChosen:saved2];
+            EXPECT([[cc2 chosenCipherName] isEqualToString:@"aes256-gcm@openssh.com"],
+                   "a profile saved before the cipher setting existed leaves the choice as it is");
+            [cc2 release];
+            [ud removeObjectForKey:@"PreferredCipher"];
+            [ud removeObjectForKey:@"SavedHosts"];
         }
 
         /* 2b. key generation: the real code path, without the dialogs */
