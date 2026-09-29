@@ -82,59 +82,40 @@ void chacha_xor(chacha_ctx *c, const u8 *in, u8 *out, size_t len)
 }
 
 /* ------------------------------ Poly1305 ------------------------------ */
-/* Four 32-bit limbs (radix 2^32) plus h4, the few bits above 2^128, in place of poly1305-donna-32's five
- * 26-bit limbs: 16 full 32x32->64 multiplies per block plus four tiny ones (h4 is at most 6), against
- * 25 full ones.  Multiplies are what a 486, a 68040 and above all a SPARC compiled for V7 (no multiply
- * instruction, so every widening multiply is a library call) are slowest at.
- *
- * The clamp makes r1..r3 multiples of 4, so s_j = 5*r_j/4 = r_j + (r_j >> 2) is exact.  A product
- * h_i*r_j with i + j >= 4 sits at weight 2^(128 + 32(i+j-4)), and 2^130 = 5 (mod p = 2^130 - 5), so it
- * equals h_i*s_j at weight 2^(32(i+j-4)): the reduction costs nothing extra.  The one term that cannot
- * use s is h4*r0 (r0 is not a multiple of 4): with V = h4*r0 = 4*(V >> 2) + (V & 3), the first part
- * folds down as 5*(V >> 2) and the last stays at weight 2^128.  Bounds: r_j < 2^28, s_j < 1.25 * 2^28,
- * h_i < 2^32, h4 <= 6, so every sum of four products is below 2^63 and nothing overflows a u64, and
- * h4*s_j and h4*r0 fit a u32.  After each block h4 is folded back to at most 4. */
-typedef struct { u32 r[4], s[4], h[5], pad[4]; } poly_ctx;
+/* 26-bit limb implementation (after poly1305-donna-32). */
+
+typedef struct { u32 r[5], h[5], pad[4]; } poly_ctx;
 
 static void poly_blocks(poly_ctx *p, const u8 *m, size_t bytes, u32 hibit)
 {
-    u32 r0 = p->r[0], r1 = p->r[1], r2 = p->r[2], r3 = p->r[3];
-    u32 s1 = p->s[1], s2 = p->s[2], s3 = p->s[3];
+    u32 r0 = p->r[0], r1 = p->r[1], r2 = p->r[2], r3 = p->r[3], r4 = p->r[4];
+    u32 s1 = r1 * 5, s2 = r2 * 5, s3 = r3 * 5, s4 = r4 * 5;
     u32 h0 = p->h[0], h1 = p->h[1], h2 = p->h[2], h3 = p->h[3], h4 = p->h[4];
-    u64 d0 = 0, d1 = 0, d2 = 0, d3 = 0, t = 0;     /* always set before read, every pass of the while loop
-                                                    * below; m68k's dataflow analysis can't see that across
-                                                    * the loop back-edge */
-    u32 v, c;
+    u64 d0 = 0, d1 = 0, d2 = 0, d3 = 0, d4 = 0;  /* always set before read, every pass of the
+                                                    * while loop below; m68k's dataflow analysis
+                                                    * can't see that across the loop back-edge */
+    u32 c;
 
     while (bytes >= 16) {
-        t = (u64)h0 + LOAD32_LE(m);                          h0 = (u32)t;     /* h += m, and hibit above it */
-        t = (u64)h1 + LOAD32_LE(m + 4) + (t >> 32);          h1 = (u32)t;
-        t = (u64)h2 + LOAD32_LE(m + 8) + (t >> 32);          h2 = (u32)t;
-        t = (u64)h3 + LOAD32_LE(m + 12) + (t >> 32);         h3 = (u32)t;
-        h4 += (u32)(t >> 32) + hibit;
+        h0 += (LOAD32_LE(m)) & 0x3ffffff;
+        h1 += (LOAD32_LE(m + 3) >> 2) & 0x3ffffff;
+        h2 += (LOAD32_LE(m + 6) >> 4) & 0x3ffffff;
+        h3 += (LOAD32_LE(m + 9) >> 6) & 0x3ffffff;
+        h4 += (LOAD32_LE(m + 12) >> 8) | hibit;
 
-        d0 = (u64)h0 * r0 + (u64)h1 * s3 + (u64)h2 * s2 + (u64)h3 * s1;
-        d1 = (u64)h0 * r1 + (u64)h1 * r0 + (u64)h2 * s3 + (u64)h3 * s2;
-        d2 = (u64)h0 * r2 + (u64)h1 * r1 + (u64)h2 * r0 + (u64)h3 * s3;
-        d3 = (u64)h0 * r3 + (u64)h1 * r2 + (u64)h2 * r1 + (u64)h3 * r0;
-        v = h4 * r0;
-        d0 += (v >> 2) * 5;
-        d1 += h4 * s1;
-        d2 += h4 * s2;
-        d3 += h4 * s3;
+        d0 = (u64)h0 * r0 + (u64)h1 * s4 + (u64)h2 * s3 + (u64)h3 * s2 + (u64)h4 * s1;
+        d1 = (u64)h0 * r1 + (u64)h1 * r0 + (u64)h2 * s4 + (u64)h3 * s3 + (u64)h4 * s2;
+        d2 = (u64)h0 * r2 + (u64)h1 * r1 + (u64)h2 * r0 + (u64)h3 * s4 + (u64)h4 * s3;
+        d3 = (u64)h0 * r3 + (u64)h1 * r2 + (u64)h2 * r1 + (u64)h3 * r0 + (u64)h4 * s4;
+        d4 = (u64)h0 * r4 + (u64)h1 * r3 + (u64)h2 * r2 + (u64)h3 * r1 + (u64)h4 * r0;
 
-        c = (u32)(d0 >> 32); h0 = (u32)d0;
-        d1 += c; c = (u32)(d1 >> 32); h1 = (u32)d1;
-        d2 += c; c = (u32)(d2 >> 32); h2 = (u32)d2;
-        d3 += c; c = (u32)(d3 >> 32); h3 = (u32)d3;
-        h4 = c + (v & 3);
-
-        c = h4 >> 2; h4 &= 3;                                /* fold what is above 2^130 back in, x5 */
-        t = (u64)h0 + c * 5;                 h0 = (u32)t;
-        t = (u64)h1 + (t >> 32);             h1 = (u32)t;
-        t = (u64)h2 + (t >> 32);             h2 = (u32)t;
-        t = (u64)h3 + (t >> 32);             h3 = (u32)t;
-        h4 += (u32)(t >> 32);
+        c = (u32)(d0 >> 26); h0 = (u32)d0 & 0x3ffffff;
+        d1 += c; c = (u32)(d1 >> 26); h1 = (u32)d1 & 0x3ffffff;
+        d2 += c; c = (u32)(d2 >> 26); h2 = (u32)d2 & 0x3ffffff;
+        d3 += c; c = (u32)(d3 >> 26); h3 = (u32)d3 & 0x3ffffff;
+        d4 += c; c = (u32)(d4 >> 26); h4 = (u32)d4 & 0x3ffffff;
+        h0 += c * 5; c = h0 >> 26; h0 &= 0x3ffffff;
+        h1 += c;
 
         m += 16; bytes -= 16;
     }
@@ -144,23 +125,22 @@ static void poly_blocks(poly_ctx *p, const u8 *m, size_t bytes, u32 hibit)
 void poly1305_auth(u8 mac[16], const u8 *msg, size_t len, const u8 key[32])
 {
     poly_ctx p;
-    u32 h0, h1, h2, h3, h4, g0, g1, g2, g3, g4, q, mask;
-    u64 t;
+    u32 h0, h1, h2, h3, h4, c, g0, g1, g2, g3, g4, mask;
+    u64 f;
     size_t full = len & ~(size_t)15;
     u8 last[16];
     size_t rem = len - full;
-    int i;
 
-    p.r[0] = LOAD32_LE(key)      & 0x0fffffff;            /* the clamp */
-    p.r[1] = LOAD32_LE(key + 4)  & 0x0ffffffc;
-    p.r[2] = LOAD32_LE(key + 8)  & 0x0ffffffc;
-    p.r[3] = LOAD32_LE(key + 12) & 0x0ffffffc;
-    p.s[0] = 0;
-    for (i = 1; i < 4; i++) p.s[i] = p.r[i] + (p.r[i] >> 2);
-    for (i = 0; i < 5; i++) p.h[i] = 0;
-    for (i = 0; i < 4; i++) p.pad[i] = LOAD32_LE(key + 16 + 4 * i);
+    p.r[0] = (LOAD32_LE(key))          & 0x3ffffff;
+    p.r[1] = (LOAD32_LE(key + 3) >> 2) & 0x3ffff03;
+    p.r[2] = (LOAD32_LE(key + 6) >> 4) & 0x3ffc0ff;
+    p.r[3] = (LOAD32_LE(key + 9) >> 6) & 0x3f03fff;
+    p.r[4] = (LOAD32_LE(key + 12) >> 8) & 0x00fffff;
+    p.h[0] = p.h[1] = p.h[2] = p.h[3] = p.h[4] = 0;
+    p.pad[0] = LOAD32_LE(key + 16); p.pad[1] = LOAD32_LE(key + 20);
+    p.pad[2] = LOAD32_LE(key + 24); p.pad[3] = LOAD32_LE(key + 28);
 
-    poly_blocks(&p, msg, full, 1);
+    poly_blocks(&p, msg, full, 1UL << 24);
     if (rem) {
         memset(last, 0, sizeof(last));
         memcpy(last, msg + full, rem);
@@ -169,27 +149,36 @@ void poly1305_auth(u8 mac[16], const u8 *msg, size_t len, const u8 key[32])
     }
 
     h0 = p.h[0]; h1 = p.h[1]; h2 = p.h[2]; h3 = p.h[3]; h4 = p.h[4];
-    for (i = 0; i < 2; i++) {                             /* h < 2^130 (two folds: the first can carry into h4) */
-        q = h4 >> 2; h4 &= 3;
-        t = (u64)h0 + q * 5;                 h0 = (u32)t;
-        t = (u64)h1 + (t >> 32);             h1 = (u32)t;
-        t = (u64)h2 + (t >> 32);             h2 = (u32)t;
-        t = (u64)h3 + (t >> 32);             h3 = (u32)t;
-        h4 += (u32)(t >> 32);
-    }
-    t = (u64)h0 + 5;                         g0 = (u32)t;  /* g = h + 5: if that reaches 2^130, h >= p, and h - p is g's low 130 bits */
-    t = (u64)h1 + (t >> 32);                 g1 = (u32)t;
-    t = (u64)h2 + (t >> 32);                 g2 = (u32)t;
-    t = (u64)h3 + (t >> 32);                 g3 = (u32)t;
-    g4 = h4 + (u32)(t >> 32);
-    mask = 0 - ((g4 >> 2) & 1);            /* all ones if h >= p, else zero */
-    h0 = (h0 & ~mask) | (g0 & mask); h1 = (h1 & ~mask) | (g1 & mask);
-    h2 = (h2 & ~mask) | (g2 & mask); h3 = (h3 & ~mask) | (g3 & mask);
+    c = h1 >> 26; h1 &= 0x3ffffff;
+    h2 += c; c = h2 >> 26; h2 &= 0x3ffffff;
+    h3 += c; c = h3 >> 26; h3 &= 0x3ffffff;
+    h4 += c; c = h4 >> 26; h4 &= 0x3ffffff;
+    h0 += c * 5; c = h0 >> 26; h0 &= 0x3ffffff;
+    h1 += c;
 
-    t = (u64)h0 + p.pad[0];                                STORE32_LE(mac, (u32)t);        /* tag = (h + s) mod 2^128 */
-    t = (u64)h1 + p.pad[1] + (t >> 32);                    STORE32_LE(mac + 4, (u32)t);
-    t = (u64)h2 + p.pad[2] + (t >> 32);                    STORE32_LE(mac + 8, (u32)t);
-    t = (u64)h3 + p.pad[3] + (t >> 32);                    STORE32_LE(mac + 12, (u32)t);
+    g0 = h0 + 5; c = g0 >> 26; g0 &= 0x3ffffff;
+    g1 = h1 + c; c = g1 >> 26; g1 &= 0x3ffffff;
+    g2 = h2 + c; c = g2 >> 26; g2 &= 0x3ffffff;
+    g3 = h3 + c; c = g3 >> 26; g3 &= 0x3ffffff;
+    g4 = h4 + c - (1UL << 26);
+
+    mask = (g4 >> 31) - 1;         /* all ones if h >= p, else zero */
+    g0 &= mask; g1 &= mask; g2 &= mask; g3 &= mask; g4 &= mask;
+    mask = ~mask;
+    h0 = (h0 & mask) | g0; h1 = (h1 & mask) | g1; h2 = (h2 & mask) | g2;
+    h3 = (h3 & mask) | g3; h4 = (h4 & mask) | g4;
+
+    h0 = (h0 | (h1 << 26)) & 0xffffffffUL;
+    h1 = ((h1 >> 6) | (h2 << 20)) & 0xffffffffUL;
+    h2 = ((h2 >> 12) | (h3 << 14)) & 0xffffffffUL;
+    h3 = ((h3 >> 18) | (h4 << 8)) & 0xffffffffUL;
+
+    f = (u64)h0 + p.pad[0];               h0 = (u32)f;
+    f = (u64)h1 + p.pad[1] + (f >> 32);   h1 = (u32)f;
+    f = (u64)h2 + p.pad[2] + (f >> 32);   h2 = (u32)f;
+    f = (u64)h3 + p.pad[3] + (f >> 32);   h3 = (u32)f;
+    STORE32_LE(mac, h0); STORE32_LE(mac + 4, h1);
+    STORE32_LE(mac + 8, h2); STORE32_LE(mac + 12, h3);
     ssh_wipe(&p, sizeof(p));
 }
 
