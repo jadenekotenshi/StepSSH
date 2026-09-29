@@ -304,6 +304,50 @@ static void test_exhaustion_gets_resource_shortage(void)
     ssh_free(s);
 }
 
+/* ------------------------ the transport's random padding ------------------------ */
+
+/* send_packet_now() draws packet padding from a pool refilled in bulk from the DRBG (fill_padding).
+ * The same plaintext-framing trick that reaches the channel layer reaches this: with cipher "none"
+ * the padding is visible in ssh_output().  Send enough small packets to cross several 256-byte pool
+ * refills and check the padding is well-formed, is actually random, and is never used twice. */
+static void test_packet_padding(void)
+{
+    enum { NPKT = 60 };
+    ssh_session *s = bootstrap();
+    static const u8 payload[9] = { 94, 0, 0, 0, 1, 0, 0, 0, 0 };
+    u8 pads[NPKT][32];
+    size_t padlens[NPKT];
+    const u8 *out;
+    size_t outlen, off = 0, total_pad = 0;
+    int i, j, nonzero = 0, reused = 0, bad_frame = 0;
+
+    for (i = 0; i < NPKT; i++) CHECK(ssh_send_packet(s, payload, sizeof(payload)) == 0);
+    out = ssh_output(s, &outlen);
+    for (i = 0; i < NPKT; i++) {
+        u32 pktlen;
+        size_t padlen;
+        if (off + 5 > outlen) { bad_frame = 1; break; }
+        pktlen = LOAD32_BE(out + off);
+        padlen = out[off + 4];
+        if (4 + (size_t)pktlen > outlen - off || padlen < 4 || padlen > sizeof(pads[0]) ||
+            (size_t)pktlen != 1 + sizeof(payload) + padlen || (4 + (size_t)pktlen) % 8 != 0) { bad_frame = 1; break; }
+        memcpy(pads[i], out + off + 5 + sizeof(payload), padlen);
+        padlens[i] = padlen;
+        total_pad += padlen;
+        off += 4 + (size_t)pktlen;
+    }
+    CHECK(!bad_frame && off == outlen);                  /* every packet framed, sized, and 8-aligned */
+    CHECK(total_pad > 256 * 2);                          /* enough padding to cross at least two refills */
+    for (i = 0; i < NPKT && !bad_frame; i++)
+        for (j = 0; j < (int)padlens[i]; j++) if (pads[i][j]) nonzero++;
+    CHECK(nonzero > (int)total_pad * 3 / 4);             /* random bytes are zero one time in 256 */
+    for (i = 0; i < NPKT && !bad_frame; i++)             /* no two packets got the same padding bytes */
+        for (j = i + 1; j < NPKT; j++)
+            if (padlens[i] == padlens[j] && memcmp(pads[i], pads[j], padlens[i]) == 0) reused++;
+    CHECK(reused == 0);
+    ssh_free(s);
+}
+
 int main(void)
 {
     seed_rng();
@@ -313,5 +357,6 @@ int main(void)
     test_other_types_still_refused();
     test_x11_refused_when_not_requested();
     test_exhaustion_gets_resource_shortage();
+    test_packet_padding();
     TEST_DONE("ssh_x11");
 }

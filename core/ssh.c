@@ -323,6 +323,28 @@ static void mac_calc(const ssh_dir *d, u32 seq, const u8 *data, size_t n, u8 *ou
     memcpy(out, full, (size_t)d->maclen);
 }
 
+/* Packet padding is random bytes (RFC 4253 s.6), but ssh_rng_bytes costs two SHA-512 compressions per
+ * call however few bytes are asked for, and that used to be paid on every packet -- several times the
+ * cost of sealing a small one on a 32-bit CPU.  Draw it from a pool refilled 256 bytes at a time
+ * instead: the same DRBG output, roughly a fifth of the hashing.  Used bytes are wiped.  If the RNG is
+ * not ready the padding is zeros, as before. */
+static void fill_padding(ssh_session *s, u8 *out, size_t n)
+{
+    size_t take, used;
+    while (n) {
+        if (s->padleft == 0) {
+            if (ssh_rng_bytes(s->padpool, sizeof(s->padpool)) < 0) { memset(out, 0, n); return; }
+            s->padleft = sizeof(s->padpool);
+        }
+        take = n < s->padleft ? n : s->padleft;
+        used = sizeof(s->padpool) - s->padleft;
+        memcpy(out, s->padpool + used, take);
+        ssh_wipe(s->padpool + used, take);
+        s->padleft -= take;
+        out += take; n -= take;
+    }
+}
+
 static int send_packet_now(ssh_session *s, const u8 *payload, size_t plen)
 {
     ssh_dir *d = &s->tx;
@@ -347,7 +369,7 @@ static int send_packet_now(ssh_session *s, const u8 *payload, size_t plen)
     STORE32_BE(pkt, (u32)pktlen);
     pkt[4] = (u8)pad;
     memcpy(pkt + 5, payload, plen);
-    if (ssh_rng_bytes(pkt + 5 + plen, pad) < 0) memset(pkt + 5 + plen, 0, pad);
+    fill_padding(s, pkt + 5 + plen, pad);
 
     if (aead_chacha) {
         chachapoly_seal(&d->cp, s->tx_seq, pkt, pkt, pktlen);
