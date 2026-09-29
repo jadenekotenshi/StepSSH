@@ -259,7 +259,7 @@ invocation, so each architecture gets its own tuning: `-m486` for i386 (it great
 chacha20-poly1305 bulk throughput), `-O2 -fomit-frame-pointer -m68040` (`M68KOPT`) for m68k and
 `-O2 -mv8` (`SPARCOPT`) for SPARC, all benched on real hardware -- except `core/chacha.c`, which alone
 builds at `-O -mv8` there (`SPARCCHACHAOPT`): the same code ran ChaCha20 at 76.7 MB/s under `-O2 -mv8` and
-about 99 MB/s under `-O -mv8`. `-mv8` uses the hardware integer
+about 99 MB/s under `-O -mv8`, and a whole 32 KB chacha20-poly1305 seal went from 745 us to 426 us. `-mv8` uses the hardware integer
 multiply instead of gcc 2.7.2's default V7 code's library calls; it is safe because OPENSTEP only ran
 on the sun4m SPARCstations, every one of them V8. Each is a set of single-architecture gcc
 switches the other backends reject, and NeXT's `cc` has no way to scope a flag to one `-arch`
@@ -278,7 +278,7 @@ evidence. The whole `make test` suite passes on the 68040 too -- including `test
 found (and now guards against) gcc 2.7.2's m68k backend miscompiling a constant 64-bit `>> 16`
 (see `SAR16` in `core/nacl.c`). The whole `make test` suite passes on SPARC too -- the first time any
 of this ran there -- so no SPARC gcc 2.7.2 miscompile turned up and the strict-alignment guards held.
-The app itself (its GUI) has not been reported running on SPARC.
+The app itself runs on SPARC too: it has logged into a real Linux VM and transferred files to it.
 
 Run the app from a Terminal to see its startup messages (they begin `StepSSH:`):
 
@@ -373,9 +373,10 @@ out to about 4.9 and 0.52, aes128-gcm to about 3.3 and 0.29 -- so chacha20-poly1
 choice, is about 2x and 1.5x faster than the alternatives there. On SPARC it depended on how the code was
 compiled. With gcc 2.7.2's default V7 code (no multiply instruction, so every widening multiply is a library
 call) Poly1305 was about 96% of chacha20-poly1305's cost and it managed 4.3 MB/s, against about 37 for
-AES-CTR plus HMAC and 27 for aes128-gcm. `Makefile.openstep` now builds SPARC with `-O2 -mv8`, and then
-chacha20-poly1305 seals at about 43 MB/s (44.6 opening), tied with AES-256-CTR (44.3) and ahead of AES-128-CTR
-plus HMAC-SHA1 (about 38) and aes128-gcm (26.5). So the default order is right on all three machines; the
+AES-CTR plus HMAC and 27 for aes128-gcm. `Makefile.openstep` now builds SPARC with `-O2 -mv8` (and
+`core/chacha.c` alone at `-O -mv8`, see below): at `-O2` throughout chacha20-poly1305 sealed at about 43 MB/s
+(44.6 opening), tied with AES-256-CTR (44.3) and ahead of AES-128-CTR plus HMAC-SHA1 (about 38) and aes128-gcm
+(26.5); with `chacha.c` at `-O` a 32 KB packet seals and opens in 426 us, about 75 MB/s. So the default order is right on all three machines; the
 *Cipher* popup in the New Connection panel (or `stepssh -c`, for example `-c aes128-ctr -m
 hmac-sha2-256-etm@openssh.com`) changes it per connection.
 
@@ -384,11 +385,12 @@ instead of 25). It measured 23% slower on the i386 (whole chacha20-poly1305 seal
 on the 68040 or on SPARC with `-mv8`, so the original five-26-bit-limb version is back. The 44 edge-case
 vectors it prompted, which pin the final reduction around 2^130 - 5, stay in the tests.
 
-**UNVERIFIED on real hardware**: packet padding now comes from a 1 KB pool refilled from a ChaCha20 stream
-(`ssh_rng_bytes` measured 128 us on the i386 and 949 us on the 68040 per call). `bench-bulk` does not time a
-whole packet including its padding, so that gain has not been measured on hardware. On SPARC, `chacha.c` at
-`-O -mv8` was measured for ChaCha20 alone (about 99 MB/s); a whole chacha20-poly1305 seal built that way has
-not been re-benched yet.
+Packet padding now comes from a 1 KB pool refilled from a ChaCha20 stream (`ssh_rng_bytes` measured 128 us on
+the i386 and 949 us on the 68040 per call). `bench-bulk` does not time a whole packet including its padding, so
+the gain has not been measured; the only report from hardware is that typing on the 68040 shows no noticeable
+latency. The *Cipher* popup has been used on real hardware. On SPARC, `chacha.c` at `-O -mv8` measured
+about 99 MB/s for ChaCha20 alone, and a whole 32 KB chacha20-poly1305 packet now seals and opens in 426 us
+(745 us with the whole core at `-O2 -mv8`) -- Poly1305 lives in the same file and benefits too.
 
 ### Choosing compiler flags
 

@@ -40,7 +40,8 @@ M68KCFLAGS = $(M68KOPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 SPARCOPT    = -O2 -mv8
 SPARCCFLAGS = $(SPARCOPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 # core/chacha.c alone prefers plain -O on SPARC: the same code ran ChaCha20 at 76.7 MB/s under -O2 -mv8 and
-# about 99 MB/s under -O -mv8 on real hardware, while everything else in the C core does better at -O2.
+# about 99 MB/s under -O -mv8 on real hardware (a whole 32 KB chacha20-poly1305 seal: 745 us -> 426 us, since
+# Poly1305 lives in the same file), while everything else in the C core does better at -O2.
 # Applied by the .c.o rule below, for a thin SPARC build and for the fat build's sparc pass alike.
 SPARCCHACHAOPT = -O -mv8
 LIBS     = -framework AppKit -framework Foundation
@@ -382,8 +383,8 @@ dist-fat: pkg-fat
 # byte order, and this is that design intent actually holding up on real big-endian hardware, not
 # just link-time evidence. The AppKit/Objective-C layer is confirmed working there too (the app
 # runs its GUI, prompts for mouse-movement entropy, and connects out). The whole `make test` suite
-# also passes on SPARC (2026-09-29, the first time any of this ran there); the app itself is not
-# confirmed running on SPARC -- report back if you run it on real or emulated hardware.
+# also passes on SPARC (2026-09-29, the first time any of this ran there), and the app itself runs on
+# SPARC: it has logged into a real Linux VM and transferred files to it.
 #
 # CONFIRMED on real OPENSTEP 4.2 hardware (2026-09-29): the thin i386 build with -m486, and the
 # three-pass fat build described below (i386 with -m486, m68k with M68KOPT, sparc with SPARCOPT,
