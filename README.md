@@ -245,18 +245,30 @@ make -f Makefile.openstep fat-check    # fast: does cc even accept these -arch f
 make -f Makefile.openstep fat          # StepSSH.app as an i386+m68k+sparc fat binary
 make -f Makefile.openstep fat-tools    # stepssh/stepssh-keygen/stepscp, same fat treatment
 make -f Makefile.openstep install-fat  # both of the above into /LocalApps and /usr/local/bin
-make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different arch set
 ```
 
-`fat`/`fat-tools`/`install-fat` all `clean` first, so a fat build never links against thin
-(single-architecture) object files left over from a previous plain build.
+`fat`/`fat-tools`/`install-fat`/`pkg-fat` all go through one shared `fat-build` target, which
+`clean`s first (so a fat build never links against thin object files left over from a plain build)
+and always builds both the app and the command-line tools. It compiles the three architectures as
+three separate passes and `lipo -create`s the results, rather than as one multi-`-arch` `cc`
+invocation, so each architecture gets its own tuning: `-m486` for i386 (it greatly improves
+chacha20-poly1305 bulk throughput) and `-O2 -fomit-frame-pointer -m68040` (`M68KOPT`) for m68k,
+both benched on real hardware; sparc gets the plain `OPT`. Both flags are single-architecture gcc
+switches the other backends reject, and NeXT's `cc` has no way to scope a flag to one `-arch`
+within a single invocation. A plain (thin) build picks the same flags automatically when `arch(1)`
+reports i386 or m68k.
+
+**Confirmed on real OPENSTEP 4.2 hardware**: the thin i386 build with `-m486`, and the three-pass
+fat build.
 
 **Confirmed on m68k**: running on a Previous-emulated 68040, the m68k slice starts up, seeds its
 RNG, runs its GUI (including the mouse-movement entropy prompt), and makes a real SSH connection
 successfully -- slow, as expected for real crypto on an emulated 68040, but correct.
 `LOAD32_BE`/`STORE32_BE` etc. (`core/ssh_types.h`) meant the C core never assumed a byte order,
 and this is that design intent actually holding up on real big-endian hardware, not just link-time
-evidence. sparc remains unconfirmed.
+evidence. The whole `make test` suite passes on the 68040 too -- including `test_prims`, which
+found (and now guards against) gcc 2.7.2's m68k backend miscompiling a constant 64-bit `>> 16`
+(see `SAR16` in `core/nacl.c`). sparc remains unconfirmed.
 
 Run the app from a Terminal to see its startup messages (they begin `StepSSH:`):
 

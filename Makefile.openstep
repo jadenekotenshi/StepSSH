@@ -355,6 +355,11 @@ dist-fat: pkg-fat
 # runs its GUI, prompts for mouse-movement entropy, and connects out). sparc remains unconfirmed --
 # report back if you get that slice running on real or emulated hardware.
 #
+# CONFIRMED on real OPENSTEP 4.2 hardware (2026-09-29): the thin i386 build with -m486, and the
+# three-pass fat build described below (i386 with -m486, m68k with M68KOPT, sparc plain,
+# lipo-merged). The whole `make test` suite -- test_prims included -- also passes on a
+# Previous-emulated 68040.
+#
 # Split into three groups, not one -arch list: -m486 and M68KOPT (see the .c.o:/.m.o: rules above)
 # each measurably help on their own architecture, but each is a single-architecture gcc switch the
 # other backends reject outright, and NeXT's cc has no per-arch flag scoping (no -Xarch_i386 the
@@ -364,7 +369,8 @@ dist-fat: pkg-fat
 # the first two get their own tuning) and `lipo -create`s the three finished binaries together,
 # rather than relying on cc's own automatic multi-arch object merging the way a single-pass fat
 # build otherwise would.
-#   make -f Makefile.openstep fat FATARCHS_SPARC=""   # e.g. skip sparc entirely
+# Each group must be a real -arch list (an empty one would turn its pass into a native thin
+# build), so to build fewer architectures edit fat-build itself rather than blanking a variable.
 FATARCHS_X86   = -arch i386
 FATARCHS_M68K  = -arch m68k
 FATARCHS_SPARC = -arch sparc
