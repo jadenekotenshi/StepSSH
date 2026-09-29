@@ -26,6 +26,11 @@ VERSION  = 1.2.1
 DEFS     = -DOPENSTEP -DSTEPSSH_VERSION='"$(VERSION)"'
 ARCHS    =                        # e.g. -arch i386 -arch m68k -arch sparc; see `fat` below
 CFLAGS   = $(OPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
+# Benched on real Previous-emulated 68040 hardware: this combination measurably beats plain $(OPT)
+# there. Used in place of $(OPT), not added to it (see the .c.o:/.m.o: rules and `fat-build` below
+# for how it's kept off the i386/sparc compiles -- same reasoning as -m486, see there).
+M68KOPT    = -O2 -fomit-frame-pointer -m68040
+M68KCFLAGS = $(M68KOPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 LIBS     = -framework AppKit -framework Foundation
 
 # Workspace takes an application's icon (and its file-type table) from a read-only __ICON segment
@@ -47,11 +52,28 @@ APP_OBJS  = app/AppController.o app/ConnectController.o app/KeyGenController.o \
 
 .SUFFIXES: .c .m .o
 
+# -m486 (486-tuned instruction scheduling) measurably speeds up chacha20-poly1305 bulk throughput
+# on real x86 hardware (see tools/optbench.sh), and M68KOPT above measurably beats plain $(OPT) on
+# real 68040 hardware. Both are single-architecture gcc switches -- -m486 is invalid on the
+# m68k/sparc backends, -m68040 invalid on i386/sparc -- so each is only added for a genuine thin
+# build of its own architecture: no -arch override in play (empty ARCHS) and `arch(1)` reporting
+# that exact architecture. A `fat` build shares one CFLAGS across every `-arch` in a single cc
+# invocation, so neither can be added there without also handing it to the other backends -- see
+# `fat-build` below for how the fat case gets them instead.
+
 .c.o:
-	$(CC) $(CFLAGS) -c $< -o $@
+	@case "$(ARCHS)-`arch`" in \
+	    -i386) echo $(CC) $(CFLAGS) -m486 -c $< -o $@; $(CC) $(CFLAGS) -m486 -c $< -o $@ ;; \
+	    -m68k) echo $(CC) $(M68KCFLAGS) -c $< -o $@; $(CC) $(M68KCFLAGS) -c $< -o $@ ;; \
+	    *) echo $(CC) $(CFLAGS) -c $< -o $@; $(CC) $(CFLAGS) -c $< -o $@ ;; \
+	esac
 
 .m.o:
-	$(CC) $(CFLAGS) -c $< -o $@
+	@case "$(ARCHS)-`arch`" in \
+	    -i386) echo $(CC) $(CFLAGS) -m486 -c $< -o $@; $(CC) $(CFLAGS) -m486 -c $< -o $@ ;; \
+	    -m68k) echo $(CC) $(M68KCFLAGS) -c $< -o $@; $(CC) $(M68KCFLAGS) -c $< -o $@ ;; \
+	    *) echo $(CC) $(CFLAGS) -c $< -o $@; $(CC) $(CFLAGS) -c $< -o $@ ;; \
+	esac
 
 all: $(APP)/StepSSH
 
@@ -276,9 +298,7 @@ pkg-assemble:
 
 pkg: all tools pkg-assemble
 
-pkg-fat: clean
-	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS)"
-	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS)"
+pkg-fat: fat-build
 	$(MAKE) -f Makefile.openstep pkg-assemble
 
 # ---- distributable archive of the .pkg's ----
@@ -316,7 +336,6 @@ dist-fat: pkg-fat
 #   make -f Makefile.openstep fat          # full: StepSSH.app as an i386+m68k+sparc fat binary
 #   make -f Makefile.openstep fat-tools    # stepssh/stepssh-keygen/stepscp, same fat treatment
 #   make -f Makefile.openstep install-fat  # fat app + fat tools into /LocalApps, /usr/local/bin
-#   make -f Makefile.openstep fat FATARCHS="-arch i386 -arch m68k"   # a different arch set
 #
 # CONFIRMED on m68k: running on a Previous-emulated 68040, the m68k slice starts up, seeds its RNG,
 # and makes a real SSH connection successfully (slow, as expected for real crypto on an emulated
@@ -325,7 +344,22 @@ dist-fat: pkg-fat
 # just link-time evidence. The AppKit/Objective-C layer is confirmed working there too (the app
 # runs its GUI, prompts for mouse-movement entropy, and connects out). sparc remains unconfirmed --
 # report back if you get that slice running on real or emulated hardware.
-FATARCHS = -arch i386 -arch m68k -arch sparc
+#
+# Split into three groups, not one -arch list: -m486 and M68KOPT (see the .c.o:/.m.o: rules above)
+# each measurably help on their own architecture, but each is a single-architecture gcc switch the
+# other backends reject outright, and NeXT's cc has no per-arch flag scoping (no -Xarch_i386 the
+# way Apple's later toolchain gained) -- a single `cc -arch i386 -arch m68k -arch sparc ...`
+# invocation sharing one CFLAGS can't give i386 and m68k each their own tuning. So `fat-build`
+# below compiles FATARCHS_X86, FATARCHS_M68K, and FATARCHS_SPARC as three separate passes (only
+# the first two get their own tuning) and `lipo -create`s the three finished binaries together,
+# rather than relying on cc's own automatic multi-arch object merging the way a single-pass fat
+# build otherwise would.
+#   make -f Makefile.openstep fat FATARCHS_SPARC=""   # e.g. skip sparc entirely
+FATARCHS_X86   = -arch i386
+FATARCHS_M68K  = -arch m68k
+FATARCHS_SPARC = -arch sparc
+FATARCHS       = $(FATARCHS_X86) $(FATARCHS_M68K) $(FATARCHS_SPARC)
+FATSTAGE       = fatstage
 
 fat-check:
 	@echo "int main(void) { return 0; }" > /tmp/ssh_fatcheck.c
@@ -334,25 +368,48 @@ fat-check:
 	lipo -info /tmp/ssh_fatcheck.o
 	@rm -f /tmp/ssh_fatcheck.c /tmp/ssh_fatcheck.o
 
-fat: clean
-	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS)"
-	@echo "== fat link done; architectures actually present in $(APP)/StepSSH: =="
+# Shared three-pass build behind fat/fat-tools/install-fat/pkg-fat: builds StepSSH.app and the CLI
+# tools once per architecture group (x86 with -m486 folded into OPT, m68k with OPT replaced by
+# M68KOPT, sparc with plain $(OPT)), staging the first two passes' binaries aside in $(FATSTAGE)
+# (cleaning between each), then lipo-merges each staged binary with its freshly-built sparc
+# counterpart into the final fat binary. Always builds both the app and the tools (needed by all
+# four callers below; the modest extra build time is the cost of not duplicating this dance four
+# times with only some of it actually reused).
+fat-build:
+	rm -rf $(FATSTAGE)
+	mkdir $(FATSTAGE)
+	$(MAKE) -f Makefile.openstep clean
+	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS_X86)" OPT="$(OPT) -m486"
+	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS_X86)" OPT="$(OPT) -m486"
+	cp $(APP)/StepSSH $(FATSTAGE)/StepSSH-x86
+	cp build/stepssh $(FATSTAGE)/stepssh-x86
+	cp build/stepssh-keygen $(FATSTAGE)/stepssh-keygen-x86
+	cp build/stepscp $(FATSTAGE)/stepscp-x86
+	$(MAKE) -f Makefile.openstep clean
+	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS_M68K)" OPT="$(M68KOPT)"
+	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS_M68K)" OPT="$(M68KOPT)"
+	cp $(APP)/StepSSH $(FATSTAGE)/StepSSH-m68k
+	cp build/stepssh $(FATSTAGE)/stepssh-m68k
+	cp build/stepssh-keygen $(FATSTAGE)/stepssh-keygen-m68k
+	cp build/stepscp $(FATSTAGE)/stepscp-m68k
+	$(MAKE) -f Makefile.openstep clean
+	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS_SPARC)"
+	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS_SPARC)"
+	lipo -create $(FATSTAGE)/StepSSH-x86 $(FATSTAGE)/StepSSH-m68k $(APP)/StepSSH -output $(APP)/StepSSH
+	lipo -create $(FATSTAGE)/stepssh-x86 $(FATSTAGE)/stepssh-m68k build/stepssh -output build/stepssh
+	lipo -create $(FATSTAGE)/stepssh-keygen-x86 $(FATSTAGE)/stepssh-keygen-m68k build/stepssh-keygen -output build/stepssh-keygen
+	lipo -create $(FATSTAGE)/stepscp-x86 $(FATSTAGE)/stepscp-m68k build/stepscp -output build/stepscp
+	rm -rf $(FATSTAGE)
+
+fat: fat-build
+	@echo "== fat build done (i386 pass used -m486, m68k pass used M68KOPT, sparc pass used plain $(OPT)); architectures actually present in $(APP)/StepSSH: =="
 	lipo -info $(APP)/StepSSH
 
-# Same idea as `fat`, for the command-line tools instead of the app: `tools` already respects
-# $(ARCHS) (it flows in through $(CFLAGS)), it just needs a clean first so it isn't linking
-# against core/*.o left over from a previous thin build.
-fat-tools: clean
-	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS)"
-	@echo "== fat tools built; architectures actually present: =="
+fat-tools: fat-build
+	@echo "== fat tools built (i386 pass used -m486, m68k pass used M68KOPT, sparc pass used plain $(OPT)); architectures actually present: =="
 	lipo -info build/stepssh build/stepssh-keygen build/stepscp
 
-# `fat` and `fat-tools` each do their own `clean` first, so chaining them as two prerequisites of
-# one target would have the second one's clean delete the first one's output before it gets
-# installed. One `clean`, then both sub-builds, avoids that.
-install-fat: clean
-	$(MAKE) -f Makefile.openstep all ARCHS="$(FATARCHS)"
-	$(MAKE) -f Makefile.openstep tools ARCHS="$(FATARCHS)"
+install-fat: fat-build
 	-mkdir /usr/local
 	-mkdir $(BINDIR)
 	cp build/stepssh build/stepssh-keygen build/stepscp $(BINDIR)/
