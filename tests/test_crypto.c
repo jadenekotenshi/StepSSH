@@ -795,6 +795,10 @@ static void test_chacha(void)
         poly1305_auth(mac, msg, poly_lens[i], poly_key2);
         CHECK_MEM(mac, poly_exp2[i], 16, "poly1305");
     }
+    for (i = 0; i < N_POLYE; i++) {            /* carry and final-reduction edge cases (see gen_vectors.py) */
+        poly1305_auth(mac, polye_msg[i], (size_t)polye_len[i], polye_key[i]);
+        CHECK_MEM(mac, polye_exp[i], 16, "poly1305 edge case");
+    }
 
     chachapoly_init(&cp, cp_key);
     chachapoly_seal(&cp, CP_SEQ, sealed, cp_plain, cp_plain_LEN - 4);

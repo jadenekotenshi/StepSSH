@@ -263,6 +263,42 @@ def main():
     out.append("static const u8 poly_exp2[N_POLY][16] = {\n%s};\n" % "".join(
         "  {%s},\n" % ", ".join("0x%02x" % x for x in poly1305(pk2, pat(n, 3))) for n in pl))
 
+    # Poly1305 edge cases (a 4x32-bit-limb implementation has carry and final-reduction paths that
+    # random messages almost never reach).  With r = 1 the accumulator after n blocks is just the sum of
+    # (block + 2^128), so blocks can be chosen to land it exactly on p-3 .. p+3 (p = 2^130 - 5) and
+    # exercise the final conditional subtraction on both sides of the boundary.
+    P130 = (1 << 130) - 5
+    def le16(v): return v.to_bytes(16, "little")
+    key_r1 = bytes([1]) + bytes(15) + bytes(16)                     # r = 1, s = 0
+    key_r1_s = bytes([1]) + bytes(15) + b"\xff" * 16                 # r = 1, s = 2^128 - 1 (tag addition wraps)
+    key_max = b"\xff" * 32                                          # r = max clamped, s = 2^128 - 1
+    key_r0 = bytes(16) + bytes(range(1, 17))                        # r = 0: the tag is s, whatever the message
+    edge = []
+    for d in range(-3, 4):                                          # two blocks: h = p + d
+        m1, m2 = (1 << 128) - 1, (1 << 128) - 4 + d
+        assert (m1 + m2 + 2 * (1 << 128)) == P130 + d
+        edge.append((key_r1, le16(m1) + le16(m2)))
+    for d in range(-3, 4):                                          # three blocks: h = p + d
+        m1 = (1 << 128) - 5 + d
+        assert (m1 + 3 * (1 << 128)) == P130 + d
+        edge.append((key_r1, le16(m1) + le16(0) + le16(0)))
+    for d in (-1, 0, 1):
+        m1, m2 = (1 << 128) - 1, (1 << 128) - 4 + d
+        edge.append((key_r1_s, le16(m1) + le16(m2)))
+    for n in (0, 1, 15, 16, 17, 31, 32, 33, 48, 63, 64, 65, 79):
+        edge.append((key_max, b"\xff" * n))
+        edge.append((key_max, b"\x00" * n))
+    edge.append((key_r0, pat(33, 5)))
+    EDGE_W = 80
+    out.append("#define N_POLYE %d\n#define POLYE_W %d\n" % (len(edge), EDGE_W))
+    out.append("static const u8 polye_key[N_POLYE][32] = {\n%s};\n" % "".join(
+        "  {%s},\n" % ", ".join("0x%02x" % x for x in k) for k, m in edge))
+    out.append("static const int polye_len[N_POLYE] = {%s};\n" % ", ".join(str(len(m)) for k, m in edge))
+    out.append("static const u8 polye_msg[N_POLYE][POLYE_W] = {\n%s};\n" % "".join(
+        "  {%s},\n" % ", ".join("0x%02x" % x for x in (m + bytes(EDGE_W - len(m)))) for k, m in edge))
+    out.append("static const u8 polye_exp[N_POLYE][16] = {\n%s};\n" % "".join(
+        "  {%s},\n" % ", ".join("0x%02x" % x for x in poly1305(k, m)) for k, m in edge))
+
     # chacha20-poly1305@openssh.com packet, built independently
     cpkey = pat(64, 130); seq = 0x01020304
     pt = struct.pack(">I", 29) + pat(29, 60)         # length || payload
