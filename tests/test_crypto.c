@@ -776,6 +776,83 @@ static void test_chacha(void)
     CHECK(chachapoly_open(&cp, CP_SEQ + 1, opened, sealed, 29) == -1);   /* wrong seq */
 }
 
+/* chacha_xor's fast path (native 32-bit words: little-endian CPU, both buffers 4-byte aligned) and its
+ * generic path must give the same bytes, in place or not, at every alignment.  Calls are chunked at
+ * multiples of 64 (each call starts a fresh block), the last one partial. */
+static void test_chacha_shapes(void)
+{
+    static const size_t cuts[] = { 64, 128, 64, 192, 64 };
+    u32 store_a[104], store_b[104];               /* 400 bytes at up to 3 bytes' misalignment */
+    u8 key[32], iv[8], ref[400], plain[400];
+    chacha_ctx c;
+    int off, inplace, ncut;
+    size_t pos, n;
+
+    pattern(key, 32, 61); pattern(iv, 8, 62); pattern(plain, 400, 63);
+    chacha_keysetup(&c, key); chacha_ivsetup(&c, iv, 5);
+    chacha_xor(&c, plain, ref, 400);                     /* 6 full blocks and 16 bytes over */
+    for (off = 0; off < 4; off++) {
+        for (inplace = 0; inplace < 2; inplace++) {
+            u8 *in = (u8 *)store_a + off, *out = inplace ? in : (u8 *)store_b + off;
+            memcpy(in, plain, 400);
+            chacha_keysetup(&c, key); chacha_ivsetup(&c, iv, 5);
+            pos = 0; ncut = 0;
+            while (pos < 400) {
+                n = ncut < 5 ? cuts[ncut++] : 400;
+                if (n > 400 - pos) n = 400 - pos;
+                chacha_xor(&c, in + pos, out + pos, n);
+                pos += n;
+            }
+            CHECK_MEM(out, ref, 400, inplace ? "chacha20 chunked in place == one-shot" : "chacha20 chunked == one-shot");
+        }
+    }
+}
+
+/* chachapoly_peek_length caches the last header it decrypted, and chachapoly_open reuses it: none of
+ * that may change any result, and a cache entry must never be served for a different packet. */
+static void test_chachapoly_peek(void)
+{
+    chachapoly_ctx c, fresh;
+    u8 plain[4 + 40], sealed[4 + 40 + 16], out[4 + 40], inpl[4 + 40 + 16], other[4 + 40 + 16];
+    u32 len;
+
+    chachapoly_init(&c, cp_key);
+    chachapoly_init(&fresh, cp_key);
+    pattern(plain + 4, 40, 71);
+    STORE32_BE(plain, 40);
+    chachapoly_seal(&c, CP_SEQ, sealed, plain, 40);
+
+    len = chachapoly_peek_length(&c, CP_SEQ, sealed);
+    CHECK(len == 40);
+    CHECK(chachapoly_peek_length(&c, CP_SEQ, sealed) == 40);                 /* asked again: same answer */
+    CHECK(chachapoly_open(&c, CP_SEQ, out, sealed, 40) == 0);                /* open after a peek (cache hit) */
+    CHECK_MEM(out, plain, 44, "chachapoly open after peek");
+    CHECK(chachapoly_open(&fresh, CP_SEQ, out, sealed, 40) == 0);            /* open with no peek at all */
+    CHECK_MEM(out, plain, 44, "chachapoly open without peek");
+    memcpy(inpl, sealed, sizeof(sealed));                                     /* in place (tag included), after a peek */
+    CHECK(chachapoly_peek_length(&c, CP_SEQ, inpl) == 40);
+    CHECK(chachapoly_open(&c, CP_SEQ, inpl, inpl, 40) == 0);
+    CHECK_MEM(inpl, plain, 44, "chachapoly open in place after peek");
+
+    /* the same sequence number with a different header must not be served from the cache */
+    STORE32_BE(other, 0x11223344UL);
+    memcpy(other + 4, sealed + 4, 40 + 16);
+    CHECK(chachapoly_peek_length(&c, CP_SEQ, sealed) == 40);
+    CHECK(chachapoly_peek_length(&c, CP_SEQ, other) == chachapoly_peek_length(&fresh, CP_SEQ, other));
+    CHECK(chachapoly_peek_length(&c, CP_SEQ, sealed) == 40);                 /* and back again */
+    /* a different sequence number likewise */
+    CHECK(chachapoly_peek_length(&c, CP_SEQ + 1, sealed) == chachapoly_peek_length(&fresh, CP_SEQ + 1, sealed));
+    CHECK(chachapoly_peek_length(&c, CP_SEQ, sealed) == 40);
+
+    /* a failed open must not poison the next one */
+    sealed[20] ^= 1;
+    CHECK(chachapoly_peek_length(&c, CP_SEQ, sealed) == 40);
+    CHECK(chachapoly_open(&c, CP_SEQ, out, sealed, 40) == -1);
+    sealed[20] ^= 1;
+    CHECK(chachapoly_open(&c, CP_SEQ, out, sealed, 40) == 0);
+    CHECK_MEM(out, plain, 44, "chachapoly open after a failed open");
+}
+
 static void test_x25519(void)
 {
     u8 out[32], a[32], b[32], s1[32], s2[32];
@@ -865,7 +942,7 @@ int main(void)
 {
     test_sha(); test_hmac(); test_sha1(); test_knownhosts(); test_aes(); test_aes_blocks(); test_ctr_shapes(); test_cbc_chain();
     test_blowfish(); test_des(); test_aes_gcm(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
- test_chacha();
+ test_chacha(); test_chacha_shapes(); test_chachapoly_peek();
     test_x25519(); test_ed25519(); test_hex(); test_rng();
     test_keygen();                       /* after test_rng: that test needs an unseeded pool */
     TEST_DONE("crypto");
