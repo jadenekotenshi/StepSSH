@@ -12,6 +12,7 @@ external `ssh` binary and no OpenSSL: the protocol and all cryptography are in t
 | Key exchange | curve25519-sha256, ecdh-sha2-nistp256/384/521, diffie-hellman-group-exchange-sha256, group16-sha512, group14-sha256, group14-sha1 (last resort) |
 | Host keys | ssh-ed25519, ecdsa-sha2-nistp256/384/521, RSA (rsa-sha2-512, rsa-sha2-256, and legacy SHA-1 ssh-rsa) |
 | Ciphers / MACs | chacha20-poly1305, aes256/128-gcm, aes256/192/128-ctr; hmac-sha2-256/512 (+etm), hmac-sha1 (+etm); **legacy, chosen only if nothing better is offered:** aes256/192/128-cbc, blowfish-cbc, 3des-cbc, hmac-sha1-96, hmac-md5, hmac-md5-96 (+etm variants) |
+| Cipher choice | the *Cipher* popup in the New Connection panel offers one cipher first (ChaCha20-Poly1305, AES-256/128-GCM, AES-256/128-CTR, or the automatic default order) with the rest of the default order behind it as fallback, so a server that lacks it still connects; the last choice is the next connection's default and is saved with a remembered host. `stepssh -c` does the same from the command line |
 | Login | password, keyboard-interactive, public key: **ed25519, RSA, ECDSA**, plain or passphrase-protected; OpenSSH format and traditional PEM (PKCS#1, SEC1, PKCS#8) |
 | Files | SFTP browser on a second channel of the same connection: list, upload/download (pipelined, whole folders too), drag files/folders from Workspace's File Viewer onto the browser to upload, new folder, rename, delete |
 | Keys | *Connection > Generate Key...* creates an ed25519 key pair on this machine (optionally with a passphrase) |
@@ -32,7 +33,7 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
 **Verified on the development Mac** (all also clean under AddressSanitizer + UBSan):
 
-- `make test` &mdash; 8547 checks (`test_prims`, first, takes the 64-bit and Curve25519 field arithmetic
+- `make test` &mdash; 8971 checks (`test_prims`, first, takes the 64-bit and Curve25519 field arithmetic
   apart primitive by primitive -- it found gcc 2.7.2's m68k backend miscompiling a constant 64-bit
   `>> 16`, see `core/nacl.c`'s `SAR16` and `tests/test_prims.c`): crypto against independent references (Python, `openssl`, OpenSSL's
   own EVP API for AES-GCM, RFC/FIPS vectors), big-integer arithmetic against Python's own integers,
@@ -148,8 +149,8 @@ make -f Makefile.openstep bench     # how long RSA, bcrypt, Diffie-Hellman... ta
 make -f Makefile.openstep bench-bulk # per-primitive cost of the bulk-data path (ciphers, MACs, hashes, per-packet overheads)
 ```
 
-Expect `prims: 301`, `crypto: 7308`, `vt: 259`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79`, `x11: 70`,
-`ssh_x11: 157` &mdash; all "0 failed" (on m68k `prims` says 298 and adds a NOTE about the three checks that hit
+Expect `prims: 301`, `crypto: 7352`, `vt: 259`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79`, `x11: 70`,
+`ssh_x11: 537` &mdash; all "0 failed" (on m68k `prims` says 298 and adds a NOTE about the three checks that hit
 gcc 2.7.2's known constant-16 shift bug, which `core/nacl.c` works around).
 (If the machine has no `/dev/urandom`, the RNG test prints a note that it is crediting synthetic
 entropy; that is expected.) `make` on OPENSTEP has no `mkdir -p`, so the makefile avoids it.
@@ -255,11 +256,13 @@ make -f Makefile.openstep install-fat  # both of the above into /LocalApps and /
 and always builds both the app and the command-line tools. It compiles the three architectures as
 three separate passes and `lipo -create`s the results, rather than as one multi-`-arch` `cc`
 invocation, so each architecture gets its own tuning: `-m486` for i386 (it greatly improves
-chacha20-poly1305 bulk throughput) and `-O2 -fomit-frame-pointer -m68040` (`M68KOPT`) for m68k,
-both benched on real hardware; sparc gets the plain `OPT`. Both flags are single-architecture gcc
+chacha20-poly1305 bulk throughput), `-O2 -fomit-frame-pointer -m68040` (`M68KOPT`) for m68k and
+`-O2 -mv8` (`SPARCOPT`) for SPARC, all benched on real hardware. `-mv8` uses the hardware integer
+multiply instead of gcc 2.7.2's default V7 code's library calls; it is safe because OPENSTEP only ran
+on the sun4m SPARCstations, every one of them V8. Each is a set of single-architecture gcc
 switches the other backends reject, and NeXT's `cc` has no way to scope a flag to one `-arch`
 within a single invocation. A plain (thin) build picks the same flags automatically when `arch(1)`
-reports i386 or m68k.
+reports i386, m68k or sparc.
 
 **Confirmed on real OPENSTEP 4.2 hardware**: the thin i386 build with `-m486`, and the three-pass
 fat build.
@@ -271,7 +274,9 @@ successfully -- slow, as expected for real crypto on an emulated 68040, but corr
 and this is that design intent actually holding up on real big-endian hardware, not just link-time
 evidence. The whole `make test` suite passes on the 68040 too -- including `test_prims`, which
 found (and now guards against) gcc 2.7.2's m68k backend miscompiling a constant 64-bit `>> 16`
-(see `SAR16` in `core/nacl.c`). sparc remains unconfirmed.
+(see `SAR16` in `core/nacl.c`). The whole `make test` suite passes on SPARC too -- the first time any
+of this ran there -- so no SPARC gcc 2.7.2 miscompile turned up and the strict-alignment guards held.
+The app itself (its GUI) has not been reported running on SPARC.
 
 Run the app from a Terminal to see its startup messages (they begin `StepSSH:`):
 
@@ -327,8 +332,9 @@ Some operations are deliberately expensive and the window is unresponsive while 
 `make -f Makefile.openstep bench` to see the real numbers. Expect, roughly and relative to the
 cost of one curve25519 operation: ECDSA P-256 several times more, RSA-2048 signing and Diffie-Hellman
 group14 a few times more still, RSA-4096 and DH group16 much more, and unlocking an ssh-keygen-default
-passphrase key (bcrypt, 16 rounds) the slowest of all. Verifying an RSA host key is cheap. ChaCha20 is
-preferred over AES for bulk data because it is faster on CPUs of that era.
+passphrase key (bcrypt, 16 rounds) the slowest of all. Verifying an RSA host key is cheap. For bulk data
+chacha20-poly1305 is preferred over AES, and `bench-bulk` says that is right on the i386 and the 68040 but
+wrong on SPARC -- see "Bulk throughput" below.
 
 ### Bulk throughput
 
@@ -348,11 +354,37 @@ SHA compressions on every packet; SHA-256 and SHA-1 rounds are unrolled on renam
 hash pads with one `memset`; `ssh_wipe` is a `memset` through a volatile pointer instead of a byte loop;
 and packet padding comes from a bulk-refilled pool instead of two SHA-512 compressions per packet.
 
-**UNVERIFIED on real hardware**: all of it passes the whole test suite, ASan+UBSan, and `make interop`
-against a real `sshd` (every cipher x MAC combination and bulk transfers with checksums) on the
-development host, but the host's compiler already optimizes some of the old code (its gains are smaller
-than the hardware's should be), and none of it has been run on gcc 2.7.2 or timed on an i386 or a 68040.
-Run `make -f Makefile.openstep test` first, then `bench-bulk`, and compare with a run from before.
+**Confirmed on real hardware (2026-09-29)**: the whole `make test` suite passes on all three
+architectures -- the i386 (86Box), the m68k (a Previous-emulated 68040) and SPARC (where it was also
+the first time any of this ran). Measured with `bench-bulk`: bulk throughput on the i386 is
+significantly higher; on the 68040 AES-256-CTR improved by approximately 450% and chacha20-poly1305
+by more than 3x (both as reported by the person who ran them). SPARC has no pre-change baseline, but its figures
+are below. On the development host it also passes ASan+UBSan and `make interop`
+against a real `sshd` (every cipher x MAC combination and bulk transfers with checksums); the host's
+gains are smaller than the hardware's because a modern compiler already optimizes some of the old
+code. To repeat it on a machine: `make -f Makefile.openstep test`, then `bench-bulk`, and compare with a
+run from before the change.
+
+**Which cipher is fastest depends on the CPU.** `bench-bulk` on the real machines (32 KB packets; MB/s):
+chacha20-poly1305 seals at about 10.0 on the i386 and 0.78 on the 68040; AES-128-CTR plus HMAC-SHA1 works
+out to about 4.9 and 0.52, aes128-gcm to about 3.3 and 0.29 -- so chacha20-poly1305, the default first
+choice, is about 2x and 1.5x faster than the alternatives there. On SPARC it depended on how the code was
+compiled. With gcc 2.7.2's default V7 code (no multiply instruction, so every widening multiply is a library
+call) Poly1305 was about 96% of chacha20-poly1305's cost and it managed 4.3 MB/s, against about 37 for
+AES-CTR plus HMAC and 27 for aes128-gcm. `Makefile.openstep` now builds SPARC with `-O2 -mv8`, and then
+chacha20-poly1305 seals at about 43 MB/s (44.6 opening), tied with AES-256-CTR (44.3) and ahead of AES-128-CTR
+plus HMAC-SHA1 (about 38) and aes128-gcm (26.5). So the default order is right on all three machines; the
+*Cipher* popup in the New Connection panel (or `stepssh -c`, for example `-c aes128-ctr -m
+hmac-sha2-256-etm@openssh.com`) changes it per connection.
+
+**Tried and reverted:** a Poly1305 in four 32-bit limbs (16 full multiplies plus four tiny ones per block
+instead of 25). It measured 23% slower on the i386 (whole chacha20-poly1305 seal 10% slower) and no different
+on the 68040 or on SPARC with `-mv8`, so the original five-26-bit-limb version is back. The 44 edge-case
+vectors it prompted, which pin the final reduction around 2^130 - 5, stay in the tests.
+
+**UNVERIFIED on real hardware**: packet padding now comes from a 1 KB pool refilled from a ChaCha20 stream
+(`ssh_rng_bytes` measured 128 us on the i386 and 949 us on the 68040 per call). `bench-bulk` does not time a
+whole packet including its padding, so that gain has not been measured on hardware.
 
 ### Choosing compiler flags
 
