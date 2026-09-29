@@ -78,6 +78,8 @@ typedef struct {
     aes_gcm_ctx     gcm;        /* CIPHER_AES256GCM / CIPHER_AES128GCM only */
     chachapoly_ctx  cp;
     u8   mackey[64];
+    hmac_ctx mactmpl; /* HMAC state with the key pads already absorbed (set once in setup_dir): mac_calc
+                        * copies it per packet instead of re-deriving two SHA compressions every time */
 } ssh_dir;
 
 typedef struct ssh_evnode {

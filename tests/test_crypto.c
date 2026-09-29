@@ -76,6 +76,26 @@ static void test_hmac(void)
         hmac_final(&h, out);
         CHECK_MEM(out, hmac_md5_exp[i], 16, "hmac-md5");
     }
+    /* The transport's per-packet pattern: key once, then copy the keyed template for each MAC
+     * instead of re-running hmac_init.  The template must survive being copied and finished. */
+    for (i = 0; i < N_HMAC; i++) {
+        hmac_ctx tmpl;
+        int use, kd;
+        pattern(k, hmac_klens[i], 9);
+        pattern(m, hmac_mlens[i], 5);
+        for (kd = 0; kd < 4; kd++) {
+            const u8 *want = kd == 0 ? hmac256_exp[i] : kd == 1 ? hmac512_exp[i] : kd == 2 ? hmac1_exp[i] : hmac_md5_exp[i];
+            int wl = kd == 0 ? 32 : kd == 1 ? 64 : kd == 2 ? 20 : 16;
+            int kind = kd == 0 ? HMAC_SHA256 : kd == 1 ? HMAC_SHA512 : kd == 2 ? HMAC_SHA1 : HMAC_MD5;
+            hmac_init(&tmpl, kind, k, (size_t)hmac_klens[i]);
+            for (use = 0; use < 3; use++) {
+                h = tmpl;
+                hmac_update(&h, m, (size_t)hmac_mlens[i]);
+                hmac_final(&h, out);
+                CHECK_MEM(out, want, wl, "hmac template reuse");
+            }
+        }
+    }
 }
 
 static void test_sha1(void)

@@ -316,7 +316,7 @@ static void mac_calc(const ssh_dir *d, u32 seq, const u8 *data, size_t n, u8 *ou
                                * of it to the packet -- writing straight into `out` would overrun it for
                                * those, since callers size that space from d->maclen, not the real digest */
     STORE32_BE(sb, seq);
-    hmac_init(&h, d->mackind, d->mackey, (size_t)d->mackeylen);
+    h = d->mactmpl;                              /* keyed once in setup_dir */
     hmac_update(&h, sb, 4);
     hmac_update(&h, data, n);
     hmac_final(&h, full);
@@ -952,6 +952,7 @@ static void setup_dir(ssh_dir *d, int cidx, int midx, const u8 *iv, const u8 *ke
     d->maclen = MACS[midx].len;
     d->mackeylen = MACS[midx].keylen;
     memcpy(d->mackey, mackey, (size_t)d->mackeylen);
+    hmac_init(&d->mactmpl, d->mackind, d->mackey, (size_t)d->mackeylen);
 }
 
 /* The server's reply to our KEX init: type 31 (ECDH / DH reply) or 33 (group-exchange reply). */
