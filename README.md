@@ -354,11 +354,10 @@ uses, just not attempted in this pass.
 
 ## X11 forwarding
 
-**Not yet confirmed on real OPENSTEP 4.2 hardware** -- built and tested end to end on the
-development host against real local `sshd` (`X11Forwarding yes`) and real Xvfb X servers (see
-`make x11-smoke` below), including a real X server's own rejection of a wrong cookie, relayed back
-correctly without disturbing the rest of the session, but not yet run on the real machine against
-the user's own X server.
+**Confirmed working on real OPENSTEP 4.2 hardware**, against a real X server. Also built and tested
+end to end on the development host against real local `sshd` (`X11Forwarding yes`) and real Xvfb X
+servers (see `make x11-smoke` below), including a real X server's own rejection of a wrong cookie,
+relayed back correctly without disturbing the rest of the session.
 
 "Forward X11" in the New Connection panel, plus a Display host:port (defaulting to `127.0.0.1:6000`)
 and an optional hex Cookie, turns on `ssh -X`-style forwarding: an `x11-req` (RFC 4254 s.6.3.1) on
