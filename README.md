@@ -257,7 +257,9 @@ and always builds both the app and the command-line tools. It compiles the three
 three separate passes and `lipo -create`s the results, rather than as one multi-`-arch` `cc`
 invocation, so each architecture gets its own tuning: `-m486` for i386 (it greatly improves
 chacha20-poly1305 bulk throughput), `-O2 -fomit-frame-pointer -m68040` (`M68KOPT`) for m68k and
-`-O2 -mv8` (`SPARCOPT`) for SPARC, all benched on real hardware. `-mv8` uses the hardware integer
+`-O2 -mv8` (`SPARCOPT`) for SPARC, all benched on real hardware -- except `core/chacha.c`, which alone
+builds at `-O -mv8` there (`SPARCCHACHAOPT`): the same code ran ChaCha20 at 76.7 MB/s under `-O2 -mv8` and
+about 99 MB/s under `-O -mv8`. `-mv8` uses the hardware integer
 multiply instead of gcc 2.7.2's default V7 code's library calls; it is safe because OPENSTEP only ran
 on the sun4m SPARCstations, every one of them V8. Each is a set of single-architecture gcc
 switches the other backends reject, and NeXT's `cc` has no way to scope a flag to one `-arch`
@@ -384,7 +386,9 @@ vectors it prompted, which pin the final reduction around 2^130 - 5, stay in the
 
 **UNVERIFIED on real hardware**: packet padding now comes from a 1 KB pool refilled from a ChaCha20 stream
 (`ssh_rng_bytes` measured 128 us on the i386 and 949 us on the 68040 per call). `bench-bulk` does not time a
-whole packet including its padding, so that gain has not been measured on hardware.
+whole packet including its padding, so that gain has not been measured on hardware. On SPARC, `chacha.c` at
+`-O -mv8` was measured for ChaCha20 alone (about 99 MB/s); a whole chacha20-poly1305 seal built that way has
+not been re-benched yet.
 
 ### Choosing compiler flags
 

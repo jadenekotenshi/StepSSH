@@ -39,6 +39,10 @@ M68KCFLAGS = $(M68KOPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
 # Used in place of $(OPT), like M68KOPT.
 SPARCOPT    = -O2 -mv8
 SPARCCFLAGS = $(SPARCOPT) -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp
+# core/chacha.c alone prefers plain -O on SPARC: the same code ran ChaCha20 at 76.7 MB/s under -O2 -mv8 and
+# about 99 MB/s under -O -mv8 on real hardware, while everything else in the C core does better at -O2.
+# Applied by the .c.o rule below, for a thin SPARC build and for the fat build's sparc pass alike.
+SPARCCHACHAOPT = -O -mv8
 LIBS     = -framework AppKit -framework Foundation
 
 # Workspace takes an application's icon (and its file-type table) from a read-only __ICON segment
@@ -69,11 +73,16 @@ APP_OBJS  = app/AppController.o app/ConnectController.o app/KeyGenController.o \
 # a single cc invocation, so none of them can be added there without also handing it to the other
 # backends -- see `fat-build` below for how the fat case gets them instead.
 
+# The SPARC branch matches a thin build on a SPARC ("-sparc": empty ARCHS, arch(1) says sparc) and the fat
+# build's sparc pass ("-arch sparc-<whatever machine is doing the building>"); it picks core/chacha.c's own
+# SPARCCHACHAOPT, and SPARCOPT for every other file.
 .c.o:
 	@case "$(ARCHS)-`arch`" in \
 	    -i386) echo $(CC) $(CFLAGS) -m486 -c $< -o $@; $(CC) $(CFLAGS) -m486 -c $< -o $@ ;; \
 	    -m68k) echo $(CC) $(M68KCFLAGS) -c $< -o $@; $(CC) $(M68KCFLAGS) -c $< -o $@ ;; \
-	    -sparc) echo $(CC) $(SPARCCFLAGS) -c $< -o $@; $(CC) $(SPARCCFLAGS) -c $< -o $@ ;; \
+	    -sparc|"-arch sparc-"*) o="$(SPARCOPT)"; [ "$<" = core/chacha.c ] && o="$(SPARCCHACHAOPT)"; \
+	        echo $(CC) $$o -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp -c $< -o $@; \
+	        $(CC) $$o -Wall $(DEFS) $(ARCHS) -Icore -Iterm -Iapp -c $< -o $@ ;; \
 	    *) echo $(CC) $(CFLAGS) -c $< -o $@; $(CC) $(CFLAGS) -c $< -o $@ ;; \
 	esac
 
