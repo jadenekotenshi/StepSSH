@@ -123,6 +123,40 @@ static void test_sha1(void)
     }
 }
 
+/* Incremental hashing must equal one-shot however the input is split, at every length across several
+ * block boundaries -- the one-shot digests are checked against independent vectors above, so this pins
+ * the buffering in each update() (a partly filled block topped up, whole blocks taken from the input,
+ * the remainder buffered). */
+static void test_hash_chunking(void)
+{
+    static const size_t chunks[] = { 1, 7, 63, 64, 65, 100 };
+    u8 msg[300], one[64], many[64];
+    size_t len, off, n;
+    int k;
+
+#define HASH_CHUNKS(CTXT, INIT, UPDATE, FINAL, DLEN, NAME) do { \
+        CTXT hc_; \
+        INIT(&hc_); UPDATE(&hc_, msg, len); FINAL(&hc_, one); \
+        for (k = 0; k < 6; k++) { \
+            INIT(&hc_); \
+            for (off = 0; off < len; off += n) { \
+                n = chunks[k]; if (n > len - off) n = len - off; \
+                UPDATE(&hc_, msg + off, n); \
+            } \
+            FINAL(&hc_, many); \
+            CHECK_MEM(many, one, DLEN, NAME " chunked == one-shot"); \
+        } } while (0)
+
+    pattern(msg, 300, 41);
+    for (len = 0; len <= 260; len++) {
+        HASH_CHUNKS(sha1_ctx,   sha1_init,   sha1_update,   sha1_final,   20, "sha1");
+        HASH_CHUNKS(sha256_ctx, sha256_init, sha256_update, sha256_final, 32, "sha256");
+        HASH_CHUNKS(sha512_ctx, sha512_init, sha512_update, sha512_final, 64, "sha512");
+        HASH_CHUNKS(md5_ctx,    md5_init,    md5_update,    md5_final,    16, "md5");
+    }
+#undef HASH_CHUNKS
+}
+
 static void write_file(const char *path, const char *text)
 {
     FILE *f = fopen(path, "w");
@@ -940,7 +974,7 @@ static void test_rng(void)
 
 int main(void)
 {
-    test_sha(); test_hmac(); test_sha1(); test_knownhosts(); test_aes(); test_aes_blocks(); test_ctr_shapes(); test_cbc_chain();
+    test_sha(); test_hmac(); test_sha1(); test_hash_chunking(); test_knownhosts(); test_aes(); test_aes_blocks(); test_ctr_shapes(); test_cbc_chain();
     test_blowfish(); test_des(); test_aes_gcm(); test_encrypted_keys(); test_bcrypt_args(); test_key_zoo();
  test_chacha(); test_chacha_shapes(); test_chachapoly_peek();
     test_x25519(); test_ed25519(); test_hex(); test_rng();
