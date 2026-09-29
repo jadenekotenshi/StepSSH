@@ -32,7 +32,7 @@ keys (convert with `ssh-keygen -p -m PEM -f KEY`).
 
 **Verified on the development Mac** (all also clean under AddressSanitizer + UBSan):
 
-- `make test` &mdash; 2135 checks (`test_prims`, first, takes the 64-bit and Curve25519 field arithmetic
+- `make test` &mdash; 8547 checks (`test_prims`, first, takes the 64-bit and Curve25519 field arithmetic
   apart primitive by primitive -- it found gcc 2.7.2's m68k backend miscompiling a constant 64-bit
   `>> 16`, see `core/nacl.c`'s `SAR16` and `tests/test_prims.c`): crypto against independent references (Python, `openssl`, OpenSSL's
   own EVP API for AES-GCM, RFC/FIPS vectors), big-integer arithmetic against Python's own integers,
@@ -145,9 +145,12 @@ make -f Makefile.openstep tools     # builds stepssh, stepssh-keygen, stepscp
 make -f Makefile.openstep install   # the above into /LocalApps and /usr/local/bin (see below)
 make -f Makefile.openstep pkg       # StepSSH.pkg + StepSSHTools.pkg for Installer.app (see Packaging below)
 make -f Makefile.openstep bench     # how long RSA, bcrypt, Diffie-Hellman... take on this CPU
+make -f Makefile.openstep bench-bulk # per-primitive cost of the bulk-data path (ciphers, MACs, hashes, per-packet overheads)
 ```
 
-Expect `crypto: 952`, `vt: 259`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79` &mdash; all "0 failed".
+Expect `prims: 301`, `crypto: 7308`, `vt: 259`, `sftp: 37`, `bignum: 239`, `ecc: 97`, `rsa: 79`, `x11: 70`,
+`ssh_x11: 157` &mdash; all "0 failed" (on m68k `prims` says 298 and adds a NOTE about the three checks that hit
+gcc 2.7.2's known constant-16 shift bug, which `core/nacl.c` works around).
 (If the machine has no `/dev/urandom`, the RNG test prints a note that it is crediting synthetic
 entropy; that is expected.) `make` on OPENSTEP has no `mkdir -p`, so the makefile avoids it.
 
@@ -326,6 +329,30 @@ cost of one curve25519 operation: ECDSA P-256 several times more, RSA-2048 signi
 group14 a few times more still, RSA-4096 and DH group16 much more, and unlocking an ssh-keygen-default
 passphrase key (bcrypt, 16 rounds) the slowest of all. Verifying an RSA host key is cheap. ChaCha20 is
 preferred over AES for bulk data because it is faster on CPUs of that era.
+
+### Bulk throughput
+
+`make -f Makefile.openstep bench-bulk` times every primitive on the data path on its own -- ChaCha20
+and Poly1305 separately and as whole packets (64 B, 1400 B, 32 KB), AES-CTR/CBC/GCM, the hashes, HMAC
+as the transport uses it (set-up + sequence number + one packet), and the per-packet overheads (the
+random padding, and the wipe and shift of the input buffer) -- so a change can be compared before and
+after on the same machine. It exists because a modern host's costs are not a 486's or a 68040's.
+
+An optimization pass driven by it changed, in each case by removing work rather than trading anything
+away: AES-GCM's GHASH went from bit-serial to 4-bit tables (about 8x on the host); AES from byte-at-a-time
+to 32-bit words with one 1 KB table each way (about 2x for CTR, several times for CBC decrypt);
+chacha20-poly1305's quarter rounds run on locals, its XOR is fused into the block and done as 32-bit words
+where the CPU is little-endian and the buffers aligned, and the packet-length peek is cached instead of
+recomputed up to three times per packet; HMAC keys each direction once instead of running the two key-pad
+SHA compressions on every packet; SHA-256 and SHA-1 rounds are unrolled on renamed variables and every
+hash pads with one `memset`; `ssh_wipe` is a `memset` through a volatile pointer instead of a byte loop;
+and packet padding comes from a bulk-refilled pool instead of two SHA-512 compressions per packet.
+
+**UNVERIFIED on real hardware**: all of it passes the whole test suite, ASan+UBSan, and `make interop`
+against a real `sshd` (every cipher x MAC combination and bulk transfers with checksums) on the
+development host, but the host's compiler already optimizes some of the old code (its gains are smaller
+than the hardware's should be), and none of it has been run on gcc 2.7.2 or timed on an i386 or a 68040.
+Run `make -f Makefile.openstep test` first, then `bench-bulk`, and compare with a run from before.
 
 ### Choosing compiler flags
 
