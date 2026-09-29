@@ -118,7 +118,7 @@ struct ssh_session {
     /* packet layer */
     ssh_dir tx, rx, tx_next, rx_next;
     u32  tx_seq, rx_seq, cur_rx_seq;
-    u8     padpool[256];   /* random packet padding, drawn from the DRBG in bulk (see fill_padding) */
+    u8     padpool[1024];  /* random packet padding, refilled in bulk from a ChaCha20 stream (see fill_padding) */
     size_t padleft;        /* unused bytes at the end of padpool */
     int  rx_hdr_done;
     u32  rx_pktlen;

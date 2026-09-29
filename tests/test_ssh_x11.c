@@ -306,16 +306,16 @@ static void test_exhaustion_gets_resource_shortage(void)
 
 /* ------------------------ the transport's random padding ------------------------ */
 
-/* send_packet_now() draws packet padding from a pool refilled in bulk from the DRBG (fill_padding).
+/* send_packet_now() draws packet padding from a 1 KB pool refilled from a ChaCha20 stream (fill_padding).
  * The same plaintext-framing trick that reaches the channel layer reaches this: with cipher "none"
- * the padding is visible in ssh_output().  Send enough small packets to cross several 256-byte pool
+ * the padding is visible in ssh_output().  Send enough small packets to cross several 1 KB pool
  * refills and check the padding is well-formed, is actually random, and is never used twice. */
 static void test_packet_padding(void)
 {
-    enum { NPKT = 60 };
+    enum { NPKT = 400 };
     ssh_session *s = bootstrap();
     static const u8 payload[9] = { 94, 0, 0, 0, 1, 0, 0, 0, 0 };
-    u8 pads[NPKT][32];
+    u8 pads[NPKT][32], stream[NPKT * 32];
     size_t padlens[NPKT];
     const u8 *out;
     size_t outlen, off = 0, total_pad = 0;
@@ -337,13 +337,20 @@ static void test_packet_padding(void)
         off += 4 + (size_t)pktlen;
     }
     CHECK(!bad_frame && off == outlen);                  /* every packet framed, sized, and 8-aligned */
-    CHECK(total_pad > 256 * 2);                          /* enough padding to cross at least two refills */
+    CHECK(total_pad > 1024 * 2);                         /* enough padding to cross at least two refills */
     for (i = 0; i < NPKT && !bad_frame; i++)
         for (j = 0; j < (int)padlens[i]; j++) if (pads[i][j]) nonzero++;
     CHECK(nonzero > (int)total_pad * 3 / 4);             /* random bytes are zero one time in 256 */
-    for (i = 0; i < NPKT && !bad_frame; i++)             /* no two packets got the same padding bytes */
-        for (j = i + 1; j < NPKT; j++)
-            if (padlens[i] == padlens[j] && memcmp(pads[i], pads[j], padlens[i]) == 0) reused++;
+    /* Concatenate all the padding, in order, and require that no 16-byte window occurs twice anywhere in
+     * it: that catches a pool that stops advancing, all-zero padding, and a refill that reuses its key
+     * (the padding would then repeat every 1 KB, at offsets that need not line up with any packet). */
+    for (i = 0, total_pad = 0; i < NPKT && !bad_frame; i++) {
+        memcpy(stream + total_pad, pads[i], padlens[i]);
+        total_pad += padlens[i];
+    }
+    for (i = 0; i + 16 <= (int)total_pad; i++)
+        for (j = i + 1; j + 16 <= (int)total_pad; j++)
+            if (memcmp(stream + i, stream + j, 16) == 0) reused++;
     CHECK(reused == 0);
     ssh_free(s);
 }
