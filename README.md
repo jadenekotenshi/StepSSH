@@ -663,3 +663,19 @@ python3 tools/gen_ec_vectors.py        # curve vectors from OpenSSL
 python3 tools/gen_rsa_vectors.py       # RSA vectors from OpenSSL
 sh      tools/gen_key_fixtures.sh      # tests/keys/ from the real ssh-keygen
 ```
+
+## Terminal redraw speed and paste safety (ideas from [Rome](https://github.com/anurodhp/rome))
+
+Ported from StepTTY, where they were confirmed on the x86 VM. **UNVERIFIED here on real OPENSTEP hardware** (the host
+tests cover the logic and that a column-limited redraw paints exactly what a full one does, not the real window server).
+
+- **Dirty cells.** `term/vt.c` records, per changed row, the span of columns that changed (`dirty_x0`/`dirty_x1`);
+  `TerminalView` asks AppKit to redraw only those (one column more each side for bold overstrike) plus the cell the cursor
+  left and the one it is in, and `-drawRect:` draws only the columns its rectangle touches. Scrolls, clears and resizes
+  still redraw whole rows or the whole view.
+- **Frame cap.** Output is still fed to the emulator as it arrives, but the view hands AppKit what changed at most 20 times a second; output after a quiet moment is
+  redrawn at once, and a redraw deferred by the cap happens on the view's own one-shot timer, so it never waits on
+  anything else. Change the rate with `dwrite StepSSH TerminalMaxFPS 30` (`0` redraws on every write).
+- **Paste confirmation.** Pasting more than one line (a trailing newline does not count) asks "Paste N lines?" first, since
+  each line goes to the remote shell the moment it arrives. Skipped when the program in the terminal has turned on bracketed paste; switch it off with
+  `dwrite StepSSH TerminalConfirmPaste NO`.
