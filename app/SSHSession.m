@@ -387,13 +387,24 @@ static void sftp_ready_thunk(sftp *core, void *ctx) { [(SSHSession *)ctx sftpBec
     int n;
 
     [self flushOutput];
-    for (i = 0; i < 8 && state != SESS_ENDED; i++) {
+    for (i = 0; i < 32 && state != SESS_ENDED; i++) {
         n = recv(fd, (char *)buf, sizeof(buf), 0);
         if (n > 0) {
             ssh_rng_add_timing(0);
             ssh_input(ssh, buf, (size_t)n);
             [self processEvents];
             [self flushOutput];
+            if (n < (int)sizeof(buf)) {                /* a short read: more of a screenful is probably on its way (and a
+                                                         * window update may be what lets the server send it) -- give it a
+                                                         * moment rather than wait for the next tick */
+                fd_set rf;
+                struct timeval tv;
+                FD_ZERO(&rf);
+                FD_SET(fd, &rf);
+                tv.tv_sec = 0;
+                tv.tv_usec = 4000;
+                if (select(fd + 1, &rf, NULL, NULL, &tv) <= 0) break;
+            }
         } else if (n == 0) {
             if (state != SESS_ENDED) [self endWithMessage:@"Connection closed by remote host"];
             return;
